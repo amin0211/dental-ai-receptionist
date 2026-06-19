@@ -2,6 +2,7 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from supabase import create_client, Client
+from urllib.parse import urlparse
 
 app = FastAPI()
 
@@ -26,6 +27,43 @@ def health_check():
         "supabase_url_preview": SUPABASE_URL[:30] if SUPABASE_URL else None,
     }
 
+@app.get("/debug/supabase-test")
+def debug_supabase_test():
+    parsed = urlparse(SUPABASE_URL) if SUPABASE_URL else None
+
+    if not supabase:
+        return {
+            "ok": False,
+            "error": "Supabase client is not initialized",
+            "has_supabase_url": bool(SUPABASE_URL),
+            "has_service_role_key": bool(SUPABASE_SERVICE_ROLE_KEY),
+            "supabase_url": SUPABASE_URL,
+            "hostname": parsed.hostname if parsed else None,
+        }
+
+    try:
+        result = (
+            supabase.table("clinics")
+            .select("id,name,phone_number")
+            .limit(5)
+            .execute()
+        )
+
+        return {
+            "ok": True,
+            "supabase_url": SUPABASE_URL,
+            "hostname": parsed.hostname if parsed else None,
+            "data": result.data,
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "supabase_url": SUPABASE_URL,
+            "hostname": parsed.hostname if parsed else None,
+        }
 
 def normalize_phone(phone: str | None) -> str:
     if not phone:
