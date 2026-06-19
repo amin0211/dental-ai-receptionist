@@ -116,7 +116,33 @@ async def twilio_realtime(websocket: WebSocket):
 
                         elif event == "start":
                             stream_sid = data["start"]["streamSid"]
+
+                            start_data = data.get("start", {})
+                            call_sid = start_data.get("callSid")
+                            caller = normalize_phone(start_data.get("from"))
+                            to_number = normalize_phone(start_data.get("to"))
+
                             print(f"Twilio event: start | streamSid={stream_sid}")
+                            print(f"Realtime call metadata | callSid={call_sid} from={caller} to={to_number}")
+
+                            clinic = find_clinic_by_twilio_number(to_number)
+                            clinic_id = clinic["id"] if clinic else None
+
+                            saved_call = save_call_to_db(
+                                clinic_id=clinic_id,
+                                twilio_call_sid=call_sid,
+                                caller_phone=caller,
+                                speech_result="",
+                                confidence=None,
+                                intent="realtime",
+                                urgency="normal",
+                                summary="Realtime AI call started.",
+                            )
+
+                            if saved_call:
+                                print(f"Realtime call saved to DB: {saved_call['id']}")
+                            else:
+                                print("Realtime call was not saved to DB")
 
                         elif event == "media":
                             payload = data["media"]["payload"]
