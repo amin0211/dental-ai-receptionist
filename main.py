@@ -66,7 +66,9 @@ async def twilio_realtime(websocket: WebSocket):
                     "output_modalities": ["audio"],
                     "audio": {
                         "input": {
-                            "format": "g711_ulaw",
+                            "format": {
+                                "type": "audio/pcmu",
+                            },
                             "turn_detection": {
                                 "type": "server_vad",
                                 "threshold": 0.5,
@@ -177,7 +179,7 @@ async def twilio_realtime(websocket: WebSocket):
     finally:
         print("Realtime bridge closed")
 
-        
+
 @app.get("/")
 def health_check():
     parsed = urlparse(SUPABASE_URL) if SUPABASE_URL else None
