@@ -317,19 +317,18 @@ async def twilio_speech(request: Request):
             appointment_id = appointment_request["id"]
 
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Gather input="speech" action="/twilio/collect-name?appointment_id={appointment_id}" method="POST" timeout="6" speechTimeout="auto" language="en-US">
-        <Say voice="alice" language="en-US">
-            Thank you. I can help create an appointment request.
-            May I have your full name?
-        </Say>
-    </Gather>
+            <Response>
+                <Gather input="speech" action="/twilio/collect-name?appointment_id={appointment_id}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
+                    <Say voice="alice" language="en-US">
+                        Thank you. I can help create an appointment request.
+                        May I have your full name?
+                    </Say>
+                </Gather>
 
-    <Say voice="alice" language="en-US">
-        I did not hear your name. The front desk will still follow up with you.
-    </Say>
-</Response>
-"""
+                <Redirect method="POST">/twilio/collect-name?appointment_id={appointment_id}</Redirect>
+            </Response>
+            """
+            
             return Response(content=twiml, media_type="application/xml")
 
         message = """
