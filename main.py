@@ -50,21 +50,30 @@ def detect_intent_and_urgency(text: str) -> tuple[str, str]:
 
 def find_clinic_by_twilio_number(to_number: str):
     if not supabase:
+        print("Supabase client is not initialized")
         return None
 
-    result = (
-        supabase.table("clinics")
-        .select("*")
-        .eq("phone_number", to_number)
-        .limit(1)
-        .execute()
-    )
+    try:
+        print(f"Looking up clinic for To number: {to_number}")
 
-    if result.data:
-        return result.data[0]
+        result = (
+            supabase.table("clinics")
+            .select("*")
+            .eq("phone_number", to_number)
+            .limit(1)
+            .execute()
+        )
 
-    return None
+        print(f"Clinic lookup result: {result.data}")
 
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error finding clinic: {e}")
+        return None
 
 def save_call_to_db(
     clinic_id: str | None,
@@ -77,26 +86,35 @@ def save_call_to_db(
     summary: str,
 ):
     if not supabase:
+        print("Supabase client is not initialized")
         return None
 
-    payload = {
-        "clinic_id": clinic_id,
-        "twilio_call_sid": twilio_call_sid,
-        "caller_phone": caller_phone,
-        "speech_result": speech_result,
-        "confidence": confidence,
-        "intent": intent,
-        "urgency": urgency,
-        "summary": summary,
-    }
+    try:
+        payload = {
+            "clinic_id": clinic_id,
+            "twilio_call_sid": twilio_call_sid,
+            "caller_phone": caller_phone,
+            "speech_result": speech_result,
+            "confidence": confidence,
+            "intent": intent,
+            "urgency": urgency,
+            "summary": summary,
+        }
 
-    result = supabase.table("calls").insert(payload).execute()
+        print(f"Inserting call payload: {payload}")
 
-    if result.data:
-        return result.data[0]
+        result = supabase.table("calls").insert(payload).execute()
 
-    return None
+        print(f"Call insert result: {result.data}")
 
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error saving call to database: {e}")
+        return None
 
 def create_appointment_request_if_needed(
     clinic_id: str | None,
@@ -107,27 +125,36 @@ def create_appointment_request_if_needed(
     urgency: str,
 ):
     if not supabase:
+        print("Supabase client is not initialized")
         return None
 
     if intent != "appointment":
         return None
 
-    payload = {
-        "clinic_id": clinic_id,
-        "call_id": call_id,
-        "patient_phone": patient_phone,
-        "reason": speech_result,
-        "urgency": urgency,
-        "status": "new",
-    }
+    try:
+        payload = {
+            "clinic_id": clinic_id,
+            "call_id": call_id,
+            "patient_phone": patient_phone,
+            "reason": speech_result,
+            "urgency": urgency,
+            "status": "new",
+        }
 
-    result = supabase.table("appointment_requests").insert(payload).execute()
+        print(f"Inserting appointment request payload: {payload}")
 
-    if result.data:
-        return result.data[0]
+        result = supabase.table("appointment_requests").insert(payload).execute()
 
-    return None
+        print(f"Appointment request insert result: {result.data}")
 
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error creating appointment request: {e}")
+        return None
 
 @app.post("/twilio/voice")
 async def twilio_voice(request: Request):
