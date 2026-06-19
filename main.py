@@ -368,11 +368,46 @@ async def twilio_speech(request: Request):
     return Response(content=twiml, media_type="application/xml")
 
 
+
 @app.post("/twilio/collect-name")
 async def collect_name(request: Request):
     form = await request.form()
+
     appointment_id = request.query_params.get("appointment_id")
+    retry = int(request.query_params.get("retry", "0"))
+
     patient_name = form.get("SpeechResult", "")
+
+    if not patient_name:
+        if retry < 2:
+            next_retry = retry + 1
+
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather input="speech" action="/twilio/collect-name?appointment_id={appointment_id}&amp;retry={next_retry}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
+        <Say voice="alice" language="en-US">
+            Sorry, I did not catch your name. Please say your full name again.
+        </Say>
+    </Gather>
+
+    <Redirect method="POST">/twilio/collect-name?appointment_id={appointment_id}&amp;retry={next_retry}</Redirect>
+</Response>
+"""
+            return Response(content=twiml, media_type="application/xml")
+
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather input="speech" action="/twilio/collect-time?appointment_id={appointment_id}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
+        <Say voice="alice" language="en-US">
+            That is okay. The front desk can confirm your name later.
+            What day or time would you prefer for this appointment?
+        </Say>
+    </Gather>
+
+    <Redirect method="POST">/twilio/collect-time?appointment_id={appointment_id}</Redirect>
+</Response>
+"""
+        return Response(content=twiml, media_type="application/xml")
 
     if appointment_id:
         update_appointment_request(
@@ -384,15 +419,13 @@ async def collect_name(request: Request):
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="speech" action="/twilio/collect-time?appointment_id={appointment_id}" method="POST" timeout="6" speechTimeout="auto" language="en-US">
+    <Gather input="speech" action="/twilio/collect-time?appointment_id={appointment_id}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
         <Say voice="alice" language="en-US">
             Thank you, {safe_name}. What day or time would you prefer for this appointment?
         </Say>
     </Gather>
 
-    <Say voice="alice" language="en-US">
-        I did not hear a preferred time. The front desk will contact you to confirm.
-    </Say>
+    <Redirect method="POST">/twilio/collect-time?appointment_id={appointment_id}</Redirect>
 </Response>
 """
     return Response(content=twiml, media_type="application/xml")
@@ -401,8 +434,38 @@ async def collect_name(request: Request):
 @app.post("/twilio/collect-time")
 async def collect_time(request: Request):
     form = await request.form()
+
     appointment_id = request.query_params.get("appointment_id")
+    retry = int(request.query_params.get("retry", "0"))
+
     preferred_time = form.get("SpeechResult", "")
+
+    if not preferred_time:
+        if retry < 2:
+            next_retry = retry + 1
+
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather input="speech" action="/twilio/collect-time?appointment_id={appointment_id}&amp;retry={next_retry}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
+        <Say voice="alice" language="en-US">
+            Sorry, I did not catch the preferred time. Please say the day or time you would prefer.
+        </Say>
+    </Gather>
+
+    <Redirect method="POST">/twilio/collect-time?appointment_id={appointment_id}&amp;retry={next_retry}</Redirect>
+</Response>
+"""
+            return Response(content=twiml, media_type="application/xml")
+
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice" language="en-US">
+        That is okay. The front desk will contact you to confirm a suitable appointment time.
+        Goodbye.
+    </Say>
+</Response>
+"""
+        return Response(content=twiml, media_type="application/xml")
 
     if appointment_id:
         update_appointment_request(
