@@ -48,6 +48,7 @@ async def twilio_realtime(websocket: WebSocket):
     stream_sid = None
     current_call_id = None
     transcript_parts = []
+    ai_transcript_buffer = ""
 
 
     openai_url = f"wss://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
@@ -106,7 +107,7 @@ async def twilio_realtime(websocket: WebSocket):
 
 
             async def receive_from_twilio():
-                nonlocal stream_sid, current_call_id
+                nonlocal stream_sid, transcript_parts, ai_transcript_buffer
 
                 try:
                     while True:
@@ -247,7 +248,7 @@ async def twilio_realtime(websocket: WebSocket):
                         ]:
                             transcript_delta = response.get("delta")
                             if transcript_delta:
-                                transcript_parts.append(f"AI: {transcript_delta}")
+                                ai_transcript_buffer += transcript_delta
                                 print(f"AI transcript delta: {transcript_delta}")
 
 
@@ -259,6 +260,18 @@ async def twilio_realtime(websocket: WebSocket):
                             if user_transcript:
                                 transcript_parts.append(f"Caller: {user_transcript}")
                                 print(f"Caller transcript: {user_transcript}")
+
+                        elif event_type in [
+                            "response.audio_transcript.done",
+                            "response.output_audio_transcript.done",
+                        ]:
+                            final_ai_transcript = response.get("transcript") or ai_transcript_buffer
+
+                            if final_ai_transcript.strip():
+                                transcript_parts.append(f"AI: {final_ai_transcript.strip()}")
+                                print(f"AI transcript completed: {final_ai_transcript.strip()}")
+
+                            ai_transcript_buffer = ""
 
                         elif event_type == "response.done":
                             print("OpenAI event: response.done")
