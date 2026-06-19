@@ -138,11 +138,10 @@ async def twilio_realtime(websocket: WebSocket):
                             response = json.loads(openai_message)
                             event_type = response.get("type")
 
-                            # Temporary logging so we can trace what OpenAI is sending
-                            if event_type not in ["response.audio.delta", "response.output_audio.delta"]:
+                            if event_type in ["session.created", "session.updated"]:
                                 print(f"OpenAI event: {event_type}")
 
-                            if event_type in ["response.audio.delta", "response.output_audio.delta"]:
+                            elif event_type == "response.output_audio.delta":
                                 if stream_sid:
                                     audio_delta = response.get("delta")
 
@@ -159,13 +158,13 @@ async def twilio_realtime(websocket: WebSocket):
                                             )
                                         )
 
-                            elif event_type in [
-                                "response.audio_transcript.delta",
-                                "response.output_audio_transcript.delta",
-                            ]:
+                            elif event_type == "response.output_audio_transcript.delta":
                                 transcript_delta = response.get("delta")
                                 if transcript_delta:
                                     print(f"AI transcript delta: {transcript_delta}")
+
+                            elif event_type == "response.done":
+                                print("OpenAI event: response.done")
 
                             elif event_type == "error":
                                 print(f"OpenAI error: {response}")
@@ -173,6 +172,7 @@ async def twilio_realtime(websocket: WebSocket):
                     except Exception as e:
                         print(f"OpenAI receive error: {e}")
                         
+                                            
             await asyncio.gather(
                 receive_from_twilio(),
                 receive_from_openai(),
