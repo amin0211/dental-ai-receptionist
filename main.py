@@ -15,11 +15,15 @@ if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
 
 
 @app.get("/")
+@app.get("/")
 def health_check():
     return {
         "status": "ok",
         "service": "dental-ai-receptionist",
         "supabase_connected": supabase is not None,
+        "has_supabase_url": bool(SUPABASE_URL),
+        "has_service_role_key": bool(SUPABASE_SERVICE_ROLE_KEY),
+        "supabase_url_preview": SUPABASE_URL[:30] if SUPABASE_URL else None,
     }
 
 
