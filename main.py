@@ -18,6 +18,7 @@ from supabase_service import (
     save_call_to_db,
     create_appointment_request,
     update_appointment_request,
+    update_call,
 )
 
 app = FastAPI()
@@ -45,6 +46,9 @@ async def twilio_realtime(websocket: WebSocket):
         return
 
     stream_sid = None
+    current_call_id = None
+    transcript_parts = []
+
 
     openai_url = f"wss://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
 
@@ -102,7 +106,7 @@ async def twilio_realtime(websocket: WebSocket):
 
 
             async def receive_from_twilio():
-                nonlocal stream_sid
+                nonlocal stream_sid, current_call_id
 
                 try:
                     while True:
@@ -140,11 +144,12 @@ async def twilio_realtime(websocket: WebSocket):
                                 urgency="normal",
                                 summary="Realtime AI call started.",
                             )
-
                             if saved_call:
-                                print(f"Realtime call saved to DB: {saved_call['id']}")
+                                current_call_id = saved_call["id"]
+                                print(f"Realtime call saved to DB: {current_call_id}")
                             else:
-                                print("Realtime call was not saved to DB")                        
+                                print("Realtime call was not saved to DB")
+                                                    
 
 
                             print(f"Twilio event: start | streamSid={stream_sid}")
@@ -183,6 +188,19 @@ async def twilio_realtime(websocket: WebSocket):
 
                         elif event == "stop":
                             print("Twilio event: stop")
+
+                            if current_call_id and transcript_parts:
+                                full_transcript = "\n".join(transcript_parts)
+
+                                update_call(
+                                    current_call_id,
+                                    {
+                                        "speech_result": full_transcript,
+                                        "summary": "Realtime AI call completed.",
+                                    },
+                                )
+                                
+
                             await openai_ws.close()
                             break
 
@@ -229,7 +247,18 @@ async def twilio_realtime(websocket: WebSocket):
                         ]:
                             transcript_delta = response.get("delta")
                             if transcript_delta:
+                                transcript_parts.append(f"AI: {transcript_delta}")
                                 print(f"AI transcript delta: {transcript_delta}")
+
+
+                        elif event_type in [
+                            "conversation.item.input_audio_transcription.completed",
+                            "input_audio_buffer.transcription.completed",
+                        ]:
+                            user_transcript = response.get("transcript")
+                            if user_transcript:
+                                transcript_parts.append(f"Caller: {user_transcript}")
+                                print(f"Caller transcript: {user_transcript}")
 
                         elif event_type == "response.done":
                             print("OpenAI event: response.done")

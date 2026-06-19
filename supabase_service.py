@@ -155,3 +155,29 @@ def update_appointment_request(appointment_id: str, updates: dict):
     except Exception as e:
         print(f"Error updating appointment request: {e}")
         return None
+    
+def update_call(call_id: str, updates: dict):
+    if not supabase:
+        print("Supabase client is not initialized")
+        return None
+
+    try:
+        print(f"Updating call {call_id}: {updates}")
+
+        result = (
+            supabase.table("calls")
+            .update(updates)
+            .eq("id", call_id)
+            .execute()
+        )
+
+        print(f"Call update result: {result.data}")
+
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error updating call: {e}")
+        return None
