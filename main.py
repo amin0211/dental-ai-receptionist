@@ -130,49 +130,60 @@ async def twilio_realtime(websocket: WebSocket):
                     print("Twilio WebSocket disconnected")
                     await openai_ws.close()
 
-                async def receive_from_openai():
-                    nonlocal stream_sid
+                except Exception as e:
+                    print(f"Twilio receive error: {e}")
+                    await openai_ws.close()
 
-                    try:
-                        async for openai_message in openai_ws:
-                            response = json.loads(openai_message)
-                            event_type = response.get("type")
 
-                            if event_type in ["session.created", "session.updated"]:
-                                print(f"OpenAI event: {event_type}")
+            async def receive_from_openai():
+                nonlocal stream_sid
 
-                            elif event_type == "response.output_audio.delta":
-                                if stream_sid:
-                                    audio_delta = response.get("delta")
+                try:
+                    async for openai_message in openai_ws:
+                        response = json.loads(openai_message)
+                        event_type = response.get("type")
 
-                                    if audio_delta:
-                                        await websocket.send_text(
-                                            json.dumps(
-                                                {
-                                                    "event": "media",
-                                                    "streamSid": stream_sid,
-                                                    "media": {
-                                                        "payload": audio_delta,
-                                                    },
-                                                }
-                                            )
+                        if event_type in ["session.created", "session.updated"]:
+                            print(f"OpenAI event: {event_type}")
+
+                        elif event_type in ["response.audio.delta", "response.output_audio.delta"]:
+                            if stream_sid:
+                                audio_delta = response.get("delta")
+
+                                if audio_delta:
+                                    await websocket.send_text(
+                                        json.dumps(
+                                            {
+                                                "event": "media",
+                                                "streamSid": stream_sid,
+                                                "media": {
+                                                    "payload": audio_delta,
+                                                },
+                                            }
                                         )
+                                    )
 
-                            elif event_type == "response.output_audio_transcript.delta":
-                                transcript_delta = response.get("delta")
-                                if transcript_delta:
-                                    print(f"AI transcript delta: {transcript_delta}")
+                        elif event_type in [
+                            "response.audio_transcript.delta",
+                            "response.output_audio_transcript.delta",
+                        ]:
+                            transcript_delta = response.get("delta")
+                            if transcript_delta:
+                                print(f"AI transcript delta: {transcript_delta}")
 
-                            elif event_type == "response.done":
-                                print("OpenAI event: response.done")
+                        elif event_type == "response.done":
+                            print("OpenAI event: response.done")
 
-                            elif event_type == "error":
-                                print(f"OpenAI error: {response}")
+                        elif event_type == "error":
+                            print(f"OpenAI error: {response}")
 
-                    except Exception as e:
-                        print(f"OpenAI receive error: {e}")
-                        
-                                            
+                        else:
+                            print(f"OpenAI event: {event_type}")
+
+                except Exception as e:
+                    print(f"OpenAI receive error: {e}")
+
+
             await asyncio.gather(
                 receive_from_twilio(),
                 receive_from_openai(),
