@@ -77,7 +77,9 @@ async def twilio_realtime(websocket: WebSocket):
                             },
                         },
                         "output": {
-                            "format": "g711_ulaw",
+                            "format": {
+                                "type": "audio/pcmu",
+                            },
                             "voice": "alloy",
                         },
                     },
