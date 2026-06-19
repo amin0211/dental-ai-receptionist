@@ -62,6 +62,7 @@ async def twilio_realtime(websocket: WebSocket):
                         "For appointment requests, ask for the caller's full name, reason for visit, and preferred day or time. "
                         "Do not claim the appointment is confirmed. Say the front desk will contact them to confirm. "
                         "For emergencies such as severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise urgent medical or emergency care."
+                        "Do not interrupt the caller. Wait until the caller clearly finishes speaking before responding."
                     ),
                     "output_modalities": ["audio"],
                     "audio": {
@@ -71,9 +72,9 @@ async def twilio_realtime(websocket: WebSocket):
                             },
                             "turn_detection": {
                                 "type": "server_vad",
-                                "threshold": 0.5,
-                                "prefix_padding_ms": 300,
-                                "silence_duration_ms": 600,
+                                "threshold": 0.75,
+                                "prefix_padding_ms": 500,
+                                "silence_duration_ms": 1200,
                             },
                         },
                         "output": {
