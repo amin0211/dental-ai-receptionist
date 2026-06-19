@@ -107,7 +107,7 @@ async def twilio_realtime(websocket: WebSocket):
 
 
             async def receive_from_twilio():
-                nonlocal stream_sid, transcript_parts, ai_transcript_buffer
+                nonlocal stream_sid, current_call_id, transcript_parts
 
                 try:
                     while True:
@@ -145,35 +145,13 @@ async def twilio_realtime(websocket: WebSocket):
                                 urgency="normal",
                                 summary="Realtime AI call started.",
                             )
+
                             if saved_call:
                                 current_call_id = saved_call["id"]
                                 print(f"Realtime call saved to DB: {current_call_id}")
                             else:
                                 print("Realtime call was not saved to DB")
-                                                    
 
-
-                            print(f"Twilio event: start | streamSid={stream_sid}")
-                            print(f"Realtime call metadata | callSid={call_sid} from={caller} to={to_number}")
-
-                            clinic = find_clinic_by_twilio_number(to_number)
-                            clinic_id = clinic["id"] if clinic else None
-
-                            saved_call = save_call_to_db(
-                                clinic_id=clinic_id,
-                                twilio_call_sid=call_sid,
-                                caller_phone=caller,
-                                speech_result="",
-                                confidence=None,
-                                intent="realtime",
-                                urgency="normal",
-                                summary="Realtime AI call started.",
-                            )
-
-                            if saved_call:
-                                print(f"Realtime call saved to DB: {saved_call['id']}")
-                            else:
-                                print("Realtime call was not saved to DB")
 
                         elif event == "media":
                             payload = data["media"]["payload"]
@@ -215,7 +193,7 @@ async def twilio_realtime(websocket: WebSocket):
 
 
             async def receive_from_openai():
-                nonlocal stream_sid
+                nonlocal stream_sid, transcript_parts, ai_transcript_buffer
 
                 try:
                     async for openai_message in openai_ws:
