@@ -8,6 +8,9 @@ from supabase import create_client, Client
 from fastapi import WebSocket, WebSocketDisconnect
 import json
 
+import asyncio
+import websockets
+
 app = FastAPI()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -18,33 +21,163 @@ supabase: Client | None = None
 if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
+
+
 @app.websocket("/twilio/realtime")
 async def twilio_realtime(websocket: WebSocket):
     await websocket.accept()
     print("Twilio realtime WebSocket connected")
 
+    if not OPENAI_API_KEY:
+        print("OPENAI_API_KEY is missing")
+        await websocket.close()
+        return
+
+    stream_sid = None
+
+    openai_url = f"wss://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
+
     try:
-        while True:
-            message = await websocket.receive_text()
-            data = json.loads(message)
+        async with websockets.connect(
+            openai_url,
+            additional_headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "OpenAI-Safety-Identifier": "dental-ai-receptionist-test",
+            },
+        ) as openai_ws:
+            print("Connected to OpenAI Realtime")
 
-            event = data.get("event")
-            print(f"Twilio event: {event}")
+            session_update = {
+                "type": "session.update",
+                "session": {
+                    "type": "realtime",
+                    "model": OPENAI_REALTIME_MODEL,
+                    "instructions": (
+                        "You are a friendly, concise AI receptionist for Westview Dental in Vancouver, BC. "
+                        "You answer phone calls naturally. "
+                        "Your job is to help callers with appointments, general questions, clinic hours, and urgent dental concerns. "
+                        "Keep responses short because this is a phone call. "
+                        "For appointment requests, ask for the caller's full name, reason for visit, and preferred day or time. "
+                        "Do not claim the appointment is confirmed. Say the front desk will contact them to confirm. "
+                        "For emergencies such as severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise urgent medical or emergency care."
+                    ),
+                    "output_modalities": ["audio"],
+                    "audio": {
+                        "input": {
+                            "format": "g711_ulaw",
+                            "turn_detection": {
+                                "type": "server_vad",
+                                "threshold": 0.5,
+                                "prefix_padding_ms": 300,
+                                "silence_duration_ms": 600,
+                            },
+                        },
+                        "output": {
+                            "format": "g711_ulaw",
+                            "voice": "alloy",
+                        },
+                    },
+                    "tracing": "auto",
+                },
+            }
 
-            if event == "start":
-                print(f"Stream started: {data.get('start')}")
+            await openai_ws.send(json.dumps(session_update))
+            print("Sent OpenAI session.update")
 
-            elif event == "media":
-                # audio packets arrive here
-                pass
+            async def receive_from_twilio():
+                nonlocal stream_sid
 
-            elif event == "stop":
-                print("Stream stopped")
-                break
+                try:
+                    while True:
+                        message = await websocket.receive_text()
+                        data = json.loads(message)
 
-    except WebSocketDisconnect:
-        print("Twilio realtime WebSocket disconnected")
+                        event = data.get("event")
 
+                        if event == "connected":
+                            print("Twilio event: connected")
+
+                        elif event == "start":
+                            stream_sid = data["start"]["streamSid"]
+                            print(f"Twilio event: start | streamSid={stream_sid}")
+
+                        elif event == "media":
+                            payload = data["media"]["payload"]
+
+                            await openai_ws.send(
+                                json.dumps(
+                                    {
+                                        "type": "input_audio_buffer.append",
+                                        "audio": payload,
+                                    }
+                                )
+                            )
+
+                        elif event == "stop":
+                            print("Twilio event: stop")
+                            await openai_ws.close()
+                            break
+
+                except WebSocketDisconnect:
+                    print("Twilio WebSocket disconnected")
+                    await openai_ws.close()
+
+            async def receive_from_openai():
+                nonlocal stream_sid
+
+                try:
+                    async for openai_message in openai_ws:
+                        response = json.loads(openai_message)
+                        event_type = response.get("type")
+
+                        if event_type in ["session.created", "session.updated"]:
+                            print(f"OpenAI event: {event_type}")
+
+                        elif event_type == "response.output_audio.delta":
+                            if stream_sid:
+                                audio_delta = response.get("delta")
+
+                                if audio_delta:
+                                    await websocket.send_text(
+                                        json.dumps(
+                                            {
+                                                "event": "media",
+                                                "streamSid": stream_sid,
+                                                "media": {
+                                                    "payload": audio_delta,
+                                                },
+                                            }
+                                        )
+                                    )
+
+                        elif event_type == "response.output_audio_transcript.delta":
+                            transcript_delta = response.get("delta")
+                            if transcript_delta:
+                                print(f"AI transcript delta: {transcript_delta}")
+
+                        elif event_type == "response.done":
+                            print("OpenAI event: response.done")
+
+                        elif event_type == "error":
+                            print(f"OpenAI error: {response}")
+
+                except Exception as e:
+                    print(f"OpenAI receive error: {e}")
+
+            await asyncio.gather(
+                receive_from_twilio(),
+                receive_from_openai(),
+            )
+
+    except Exception as e:
+        print(f"Realtime bridge error: {e}")
+
+    finally:
+        print("Realtime bridge closed")
+
+        
 @app.get("/")
 def health_check():
     parsed = urlparse(SUPABASE_URL) if SUPABASE_URL else None
