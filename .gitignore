@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+
+# Next.js
+node_modules/
+.next/
+out/
+dashboard/.env.local
+dashboard/node_modules/
+dashboard/.next/
