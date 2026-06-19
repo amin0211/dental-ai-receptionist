@@ -5,6 +5,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from supabase import create_client, Client
 
+from fastapi import WebSocket, WebSocketDisconnect
+import json
+
 app = FastAPI()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -15,6 +18,32 @@ supabase: Client | None = None
 if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
+@app.websocket("/twilio/realtime")
+async def twilio_realtime(websocket: WebSocket):
+    await websocket.accept()
+    print("Twilio realtime WebSocket connected")
+
+    try:
+        while True:
+            message = await websocket.receive_text()
+            data = json.loads(message)
+
+            event = data.get("event")
+            print(f"Twilio event: {event}")
+
+            if event == "start":
+                print(f"Stream started: {data.get('start')}")
+
+            elif event == "media":
+                # audio packets arrive here
+                pass
+
+            elif event == "stop":
+                print("Stream stopped")
+                break
+
+    except WebSocketDisconnect:
+        print("Twilio realtime WebSocket disconnected")
 
 @app.get("/")
 def health_check():
@@ -259,20 +288,15 @@ def update_appointment_request(appointment_id: str, updates: dict):
 async def twilio_voice(request: Request):
     twiml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="speech" action="/twilio/speech" method="POST" timeout="5" speechTimeout="auto" language="en-US">
-        <Say voice="alice" language="en-US">
-            Thank you for calling Westview Dental. I am the virtual receptionist.
-            Please briefly tell me what you need help with today.
-        </Say>
-    </Gather>
-
     <Say voice="alice" language="en-US">
-        I did not hear anything. Please call again.
+        Connecting you to the AI receptionist now.
     </Say>
+    <Connect>
+        <Stream url="wss://web-production-18008.up.railway.app/twilio/realtime" />
+    </Connect>
 </Response>
 """
     return Response(content=twiml, media_type="application/xml")
-
 
 @app.post("/twilio/speech")
 async def twilio_speech(request: Request):
@@ -328,7 +352,7 @@ async def twilio_speech(request: Request):
                 <Redirect method="POST">/twilio/collect-name?appointment_id={appointment_id}</Redirect>
             </Response>
             """
-            
+
             return Response(content=twiml, media_type="application/xml")
 
         message = """
