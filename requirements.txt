@@ -1,1 +1,4 @@
-wheel==0.47.0
+fastapi
+uvicorn[standard]
+python-multipart
+supabase
