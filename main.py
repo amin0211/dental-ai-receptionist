@@ -118,9 +118,34 @@ async def twilio_realtime(websocket: WebSocket):
                             stream_sid = data["start"]["streamSid"]
 
                             start_data = data.get("start", {})
-                            call_sid = start_data.get("callSid")
-                            caller = normalize_phone(start_data.get("from"))
-                            to_number = normalize_phone(start_data.get("to"))
+                            custom_params = start_data.get("customParameters", {})
+
+                            call_sid = custom_params.get("call_sid") or start_data.get("callSid")
+                            caller = normalize_phone(custom_params.get("caller_phone"))
+                            to_number = normalize_phone(custom_params.get("to_number"))
+
+                            print(f"Twilio event: start | streamSid={stream_sid}")
+                            print(f"Realtime custom params | callSid={call_sid} from={caller} to={to_number}")
+
+                            clinic = find_clinic_by_twilio_number(to_number)
+                            clinic_id = clinic["id"] if clinic else None
+
+                            saved_call = save_call_to_db(
+                                clinic_id=clinic_id,
+                                twilio_call_sid=call_sid,
+                                caller_phone=caller,
+                                speech_result="",
+                                confidence=None,
+                                intent="realtime",
+                                urgency="normal",
+                                summary="Realtime AI call started.",
+                            )
+
+                            if saved_call:
+                                print(f"Realtime call saved to DB: {saved_call['id']}")
+                            else:
+                                print("Realtime call was not saved to DB")                        
+
 
                             print(f"Twilio event: start | streamSid={stream_sid}")
                             print(f"Realtime call metadata | callSid={call_sid} from={caller} to={to_number}")
@@ -330,20 +355,30 @@ def detect_intent_and_urgency(text: str) -> tuple[str, str]:
     return "general", "normal"
 
 
-
 @app.post("/twilio/voice")
 async def twilio_voice(request: Request):
-    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+    form = await request.form()
+
+    caller = xml_escape(normalize_phone(form.get("From")))
+    to_number = xml_escape(normalize_phone(form.get("To")))
+    call_sid = xml_escape(form.get("CallSid") or "")
+
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="alice" language="en-US">
         Connecting you to the AI receptionist now.
     </Say>
     <Connect>
-        <Stream url="wss://web-production-18008.up.railway.app/twilio/realtime" />
+        <Stream url="wss://web-production-18008.up.railway.app/twilio/realtime">
+            <Parameter name="caller_phone" value="{caller}" />
+            <Parameter name="to_number" value="{to_number}" />
+            <Parameter name="call_sid" value="{call_sid}" />
+        </Stream>
     </Connect>
 </Response>
 """
     return Response(content=twiml, media_type="application/xml")
+
 
 @app.post("/twilio/speech")
 async def twilio_speech(request: Request):
