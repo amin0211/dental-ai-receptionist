@@ -90,18 +90,6 @@ async def twilio_realtime(websocket: WebSocket):
             await openai_ws.send(json.dumps(session_update))
             print("Sent OpenAI session.update")
 
-            await openai_ws.send(
-                json.dumps(
-                    {
-                        "type": "response.create",
-                        "response": {
-                            "instructions": "Greet the caller briefly as Westview Dental's AI receptionist and ask how you can help.",
-                            "modalities": ["audio"],
-                        },
-                    }
-                )
-            )
-            print("Sent initial OpenAI response.create")
 
             async def receive_from_twilio():
                 nonlocal stream_sid
