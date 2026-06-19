@@ -1,5 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type Call = {
   id: string;
   caller_phone: string | null;
