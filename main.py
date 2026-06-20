@@ -19,6 +19,7 @@ from supabase_service import (
     create_appointment_request,
     update_appointment_request,
     update_call,
+    match_service_from_transcript,
 )
 
 app = FastAPI()
@@ -49,7 +50,8 @@ async def twilio_realtime(websocket: WebSocket):
     current_call_id = None
     transcript_parts = []
     ai_transcript_buffer = ""
-
+    current_clinic_id = None
+    current_caller_phone = None
 
     openai_url = f"wss://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
 
@@ -126,7 +128,7 @@ async def twilio_realtime(websocket: WebSocket):
 
 
             async def receive_from_twilio():
-                nonlocal stream_sid, current_call_id, transcript_parts
+                nonlocal stream_sid, current_call_id, current_clinic_id, current_caller_phone, transcript_parts
 
                 try:
                     while True:
@@ -153,6 +155,9 @@ async def twilio_realtime(websocket: WebSocket):
 
                             clinic = find_clinic_by_twilio_number(to_number)
                             clinic_id = clinic["id"] if clinic else None
+
+                            current_clinic_id = clinic_id
+                            current_caller_phone = caller
 
                             saved_call = save_call_to_db(
                                 clinic_id=clinic_id,
@@ -197,8 +202,35 @@ async def twilio_realtime(websocket: WebSocket):
                                         "summary": "Realtime AI call completed.",
                                     },
                                 )
-                                
+                                service_match = match_service_from_transcript(
+                                    current_clinic_id,
+                                    full_transcript,
+                                )
 
+                                appointment_details = extract_appointment_details_from_transcript(
+                                    full_transcript
+                                )
+
+                                if service_match and service_match["creates_appointment_request"]:
+                                    create_appointment_request(
+                                        clinic_id=current_clinic_id,
+                                        call_id=current_call_id,
+                                        patient_phone=current_caller_phone,
+                                        patient_name=appointment_details["patient_name"],
+                                        reason=service_match["canonical_reason"],
+                                        preferred_time=appointment_details["preferred_time"],
+                                        urgency=service_match["default_urgency"],
+                                        status="new",
+                                    )
+
+                                    print(
+                                        "Realtime appointment request created from DB service match: "
+                                        f"service={service_match}, details={appointment_details}"
+                                    )
+                                else:
+                                    print(f"No appointment request created. service_match={service_match}")
+
+                                    
                             await openai_ws.close()
                             break
 
@@ -629,3 +661,55 @@ async def collect_time(request: Request):
 </Response>
 """
     return Response(content=twiml, media_type="application/xml")
+
+def extract_appointment_details_from_transcript(transcript: str) -> dict:
+    patient_name = None
+    preferred_time = None
+
+    lines = transcript.splitlines()
+
+    for i, line in enumerate(lines):
+        clean_line = line.strip()
+
+        if not clean_line.startswith("Caller:"):
+            continue
+
+        caller_text = clean_line.replace("Caller:", "").strip()
+        if not caller_text:
+            continue
+
+        previous_line = lines[i - 1].lower() if i > 0 else ""
+
+        # Name: caller response after AI asks for full name
+        if patient_name is None:
+            if (
+                "full name" in previous_line
+                or "your name" in previous_line
+                or "name, please" in previous_line
+                or "اسم" in previous_line
+                or "نام" in previous_line
+            ):
+                if len(caller_text.split()) <= 6:
+                    patient_name = caller_text
+
+        # Preferred time: caller response after AI asks for day/time/preferred time
+        if preferred_time is None:
+            if (
+                "what day" in previous_line
+                or "what time" in previous_line
+                or "preferred day" in previous_line
+                or "preferred time" in previous_line
+                or "day or time" in previous_line
+                or "works best" in previous_line
+                or "چه روزی" in previous_line
+                or "چه ساعتی" in previous_line
+                or "چه زمانی" in previous_line
+                or "زمان" in previous_line
+                or "ساعت" in previous_line
+            ):
+                preferred_time = caller_text
+
+    return {
+        "patient_name": patient_name,
+        "preferred_time": preferred_time,
+    }

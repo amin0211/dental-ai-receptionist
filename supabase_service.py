@@ -181,3 +181,68 @@ def update_call(call_id: str, updates: dict):
     except Exception as e:
         print(f"Error updating call: {e}")
         return None
+    
+
+def match_service_from_transcript(clinic_id: str | None, transcript: str):
+    if not supabase or not clinic_id:
+        print("Cannot match service: missing supabase or clinic_id")
+        return None
+
+    try:
+        result = (
+            supabase.table("service_keywords")
+            .select(
+                "keyword, language, match_type, "
+                "service_categories(id, name, canonical_reason, default_urgency, creates_appointment_request)"
+            )
+            .eq("clinic_id", clinic_id)
+            .eq("is_active", True)
+            .execute()
+        )
+
+        transcript_lower = transcript.lower()
+
+        best_match = None
+        best_keyword_length = 0
+
+        for row in result.data or []:
+            keyword = (row.get("keyword") or "").strip()
+            if not keyword:
+                continue
+
+            keyword_lower = keyword.lower()
+            match_type = row.get("match_type") or "contains"
+
+            matched = False
+
+            if match_type == "contains":
+                matched = keyword_lower in transcript_lower
+            elif match_type == "exact":
+                matched = keyword_lower == transcript_lower
+
+            # Prefer longer/more specific keyword matches
+            if matched and len(keyword_lower) > best_keyword_length:
+                best_match = row
+                best_keyword_length = len(keyword_lower)
+
+        if not best_match:
+            print("No service keyword matched transcript")
+            return None
+
+        category = best_match.get("service_categories") or {}
+
+        matched_service = {
+            "keyword": best_match.get("keyword"),
+            "category_id": category.get("id"),
+            "category_name": category.get("name"),
+            "canonical_reason": category.get("canonical_reason"),
+            "default_urgency": category.get("default_urgency") or "normal",
+            "creates_appointment_request": bool(category.get("creates_appointment_request")),
+        }
+
+        print(f"Matched service from DB: {matched_service}")
+        return matched_service
+
+    except Exception as e:
+        print(f"Error matching service from transcript: {e}")
+        return None
