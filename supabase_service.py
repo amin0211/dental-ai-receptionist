@@ -134,6 +134,8 @@ def create_appointment_request(
     patient_name: str | None = None,
     preferred_time: str | None = None,
     status: str = "new",
+    doctor_id: str | None = None,
+    preferred_doctor_name: str | None = None,
 ):
     if not supabase:
         print("Supabase client is not initialized")
@@ -149,6 +151,8 @@ def create_appointment_request(
             "preferred_time": preferred_time,
             "urgency": urgency or "normal",
             "status": status,
+            "doctor_id": doctor_id,
+            "preferred_doctor_name": preferred_doctor_name,
         }
 
         print(f"Inserting appointment request payload: {payload}")
@@ -165,7 +169,6 @@ def create_appointment_request(
     except Exception as e:
         print(f"Error creating appointment request: {e}")
         return None
-
 
 def update_appointment_request(appointment_id: str, updates: dict):
     if not supabase:
@@ -235,7 +238,9 @@ def save_call_extraction(
     extraction_notes: str | None = None,
     preferred_date_raw: str | None = None,
     preferred_date_confirmed: bool | None = None,
-    preferred_time_confirmed: bool | None = None,    
+    preferred_time_confirmed: bool | None = None,
+    doctor_id: str | None = None,
+    preferred_doctor_name: str | None = None,
 ):
     if not supabase:
         print("Supabase client is not initialized")
@@ -259,6 +264,8 @@ def save_call_extraction(
             "preferred_date_raw": preferred_date_raw,
             "preferred_date_confirmed": preferred_date_confirmed,
             "preferred_time_confirmed": preferred_time_confirmed,
+            "doctor_id": doctor_id,
+            "preferred_doctor_name": preferred_doctor_name,
         }
 
         print(f"Inserting call extraction payload: {payload}")
@@ -340,3 +347,101 @@ def match_service_from_transcript(clinic_id: str | None, transcript: str):
         print(f"Error matching service from transcript: {e}")
         return None
     
+def get_active_doctors_for_clinic(clinic_id: str | None) -> list[dict]:
+    if not supabase or not clinic_id:
+        print("Cannot load doctors: missing supabase or clinic_id")
+        return []
+
+    try:
+        result = (
+            supabase.table("clinic_doctors")
+            .select("id, full_name, display_name, title, specialty, is_active")
+            .eq("clinic_id", clinic_id)
+            .eq("is_active", True)
+            .order("full_name")
+            .execute()
+        )
+
+        doctors = result.data or []
+        print(f"Loaded active doctors for clinic {clinic_id}: {doctors}")
+        return doctors
+
+    except Exception as e:
+        print(f"Error loading active doctors: {e}")
+        return []
+
+
+def match_doctor_from_name(
+    doctors: list[dict],
+    preferred_doctor_name: str | None,
+) -> dict | None:
+    if not doctors or not preferred_doctor_name:
+        return None
+
+    wanted = normalize_search_text(preferred_doctor_name)
+
+    no_preference_values = [
+        "no preference",
+        "any doctor",
+        "any dentist",
+        "whoever is available",
+        "does not matter",
+        "فرقی ندارد",
+        "فرقی نمیکند",
+        "هر دکتری",
+        "هرکسی",
+        "مهم نیست",
+    ]
+
+    if wanted in [normalize_search_text(value) for value in no_preference_values]:
+        return None
+
+    best_match = None
+    best_score = 0
+
+    for doctor in doctors:
+        full_name = normalize_search_text(doctor.get("full_name"))
+        display_name = normalize_search_text(doctor.get("display_name"))
+        specialty = normalize_search_text(doctor.get("specialty"))
+
+        possible_names = [
+            full_name,
+            display_name,
+            full_name.replace("dr.", "").replace("doctor", "").strip(),
+            display_name.replace("dr.", "").replace("doctor", "").strip(),
+        ]
+
+        score = 0
+
+        for name in possible_names:
+            if not name:
+                continue
+
+            if wanted == name:
+                score = max(score, 100)
+
+            elif wanted in name:
+                score = max(score, 80)
+
+            elif name in wanted:
+                score = max(score, 75)
+
+            # Match last name, like caller says "Lee" or "Dr. Lee"
+            name_parts = [part for part in name.split() if len(part) >= 3]
+            for part in name_parts:
+                if part in wanted:
+                    score = max(score, 60)
+
+        if specialty and specialty in wanted:
+            score = max(score, 40)
+
+        if score > best_score:
+            best_score = score
+            best_match = doctor
+
+    if best_score >= 60:
+        print(f"Matched doctor: {best_match} with score {best_score}")
+        return best_match
+
+    print(f"No doctor matched preferred_doctor_name={preferred_doctor_name}")
+    return None
