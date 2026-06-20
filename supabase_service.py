@@ -233,6 +233,9 @@ def save_call_extraction(
     urgency: str | None = "normal",
     confidence: float | None = None,
     extraction_notes: str | None = None,
+    preferred_date_raw: str | None = None,
+    preferred_date_confirmed: bool | None = None,
+    preferred_time_confirmed: bool | None = None,    
 ):
     if not supabase:
         print("Supabase client is not initialized")
@@ -253,6 +256,9 @@ def save_call_extraction(
             "urgency": urgency or "normal",
             "confidence": confidence,
             "extraction_notes": extraction_notes,
+            "preferred_date_raw": preferred_date_raw,
+            "preferred_date_confirmed": preferred_date_confirmed,
+            "preferred_time_confirmed": preferred_time_confirmed,
         }
 
         print(f"Inserting call extraction payload: {payload}")
