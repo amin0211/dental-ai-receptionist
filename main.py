@@ -59,6 +59,7 @@ async def twilio_realtime(websocket: WebSocket):
     current_clinic_id = None
     current_caller_phone = None
     current_doctors = []
+    realtime_session_ready = False
 
     openai_url = f"wss://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
 
@@ -134,13 +135,9 @@ async def twilio_realtime(websocket: WebSocket):
                     "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
                 )
 
-            await openai_ws.send(json.dumps(session_update))
-            print("Sent OpenAI session.update")
-
 
             async def receive_from_twilio():
-                nonlocal stream_sid, current_call_id, current_clinic_id, current_caller_phone, transcript_parts, current_doctors
-
+                nonlocal stream_sid, current_call_id, current_clinic_id, current_caller_phone, transcript_parts, current_doctors, realtime_session_ready
                 try:
                     while True:
                         message = await websocket.receive_text()
@@ -238,8 +235,8 @@ async def twilio_realtime(websocket: WebSocket):
 
                             await openai_ws.send(json.dumps(session_update))
                             print("Sent OpenAI session.update with clinic doctor context")
-                            
-                                                          
+                            realtime_session_ready = True
+
                             saved_call = save_call_to_db(
                                 clinic_id=clinic_id,
                                 twilio_call_sid=call_sid,
@@ -259,6 +256,9 @@ async def twilio_realtime(websocket: WebSocket):
 
 
                         elif event == "media":
+                            if not realtime_session_ready:
+                                continue
+
                             payload = data["media"]["payload"]
 
                             await openai_ws.send(
