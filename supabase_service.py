@@ -15,6 +15,43 @@ def normalize_phone(phone: str | None) -> str:
         return ""
     return phone.strip()
 
+def normalize_search_text(text: str | None) -> str:
+    if not text:
+        return ""
+
+    normalized = text.lower().strip()
+
+    # Arabic/Persian character normalization
+    replacements = {
+        "ي": "ی",
+        "ى": "ی",
+        "ك": "ک",
+        "ۀ": "ه",
+        "ة": "ه",
+        "ؤ": "و",
+        "إ": "ا",
+        "أ": "ا",
+        "آ": "ا",
+        "\u200c": " ",  # zero-width non-joiner
+        "\u200f": "",
+        "\u200e": "",
+    }
+
+    for old, new in replacements.items():
+        normalized = normalized.replace(old, new)
+
+    # Remove Arabic diacritics
+    diacritics = [
+        "\u064b", "\u064c", "\u064d", "\u064e", "\u064f",
+        "\u0650", "\u0651", "\u0652", "\u0670"
+    ]
+    for mark in diacritics:
+        normalized = normalized.replace(mark, "")
+
+    # Normalize spacing
+    normalized = " ".join(normalized.split())
+
+    return normalized
 
 def find_clinic_by_twilio_number(to_number: str | None):
     if not supabase:
@@ -200,7 +237,7 @@ def match_service_from_transcript(clinic_id: str | None, transcript: str):
             .execute()
         )
 
-        transcript_lower = transcript.lower()
+        transcript_lower = normalize_search_text(transcript)
 
         best_match = None
         best_keyword_length = 0
@@ -210,7 +247,7 @@ def match_service_from_transcript(clinic_id: str | None, transcript: str):
             if not keyword:
                 continue
 
-            keyword_lower = keyword.lower()
+            keyword_lower = normalize_search_text(keyword)
             match_type = row.get("match_type") or "contains"
 
             matched = False
@@ -246,3 +283,4 @@ def match_service_from_transcript(clinic_id: str | None, transcript: str):
     except Exception as e:
         print(f"Error matching service from transcript: {e}")
         return None
+    

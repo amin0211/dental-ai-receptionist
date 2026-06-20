@@ -72,6 +72,12 @@ async def twilio_realtime(websocket: WebSocket):
                     "model": OPENAI_REALTIME_MODEL,
                     "instructions": (
                         "You are a friendly, concise AI receptionist for Westview Dental in Vancouver, BC. "
+                        "If the caller speaks Persian/Farsi, respond in Persian/Farsi. "
+                        "If the caller speaks English, respond in English. "
+                        "Use the same language as the caller unless they ask otherwise. "
+                        "For Persian callers, collect the same details step by step: full name, reason for visit, and preferred day or time. "
+                        "Do not translate the caller's name unless they spell it in English. "
+
                         "You answer phone calls naturally and keep responses short. "
                         "Your job is to help callers with appointment requests, clinic hours, location questions, and urgent dental concerns. "
 
@@ -688,6 +694,10 @@ def extract_appointment_details_from_transcript(transcript: str) -> dict:
                 or "name, please" in previous_line
                 or "اسم" in previous_line
                 or "نام" in previous_line
+                or "اسم کامل" in previous_line
+                or "نام کامل" in previous_line
+                or "اسمتون" in previous_line
+                or "نامتون" in previous_line                
             ):
                 if len(caller_text.split()) <= 6:
                     patient_name = caller_text
@@ -706,6 +716,12 @@ def extract_appointment_details_from_transcript(transcript: str) -> dict:
                 or "چه زمانی" in previous_line
                 or "زمان" in previous_line
                 or "ساعت" in previous_line
+                or "کی" in previous_line
+                or "چه موقع" in previous_line
+                or "چه روز" in previous_line
+                or "چه ساعت" in previous_line
+                or "زمانی مدنظرتونه" in previous_line
+                or "ساعت مدنظرتون" in previous_line                
             ):
                 preferred_time = caller_text
 
