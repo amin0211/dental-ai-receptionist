@@ -3,3 +3,4 @@ uvicorn[standard]
 python-multipart
 supabase
 websockets
+openai>=1.93.0
