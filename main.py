@@ -82,8 +82,16 @@ async def twilio_realtime(websocket: WebSocket):
                         "Do not skip steps. Never ask for more than one field in the same reply. "
                         "Never ask for date and time together. "
 
-                        "Every non-final reply must end with a direct question. "
-                        "Do not end with filler or transition statements such as: one moment, please wait, let me check, let me clarify, I will save it, or next step. "
+                        "Every non-final reply must be only one direct question. "
+                        "Do not say transition sentences before the question. "
+                        "Forbidden phrases in any language include: باشه حالا, می‌رم مرحله بعدی, بذار ثبت کنم, خیلی خب بذار, one moment, please wait, let me save, next step. "
+                        "If you need the next field, ask the next question directly with no explanation. "
+
+                        "For preferred_date_raw, the date is not collected until the caller clearly confirms it. "
+                        "If the caller corrects the date, repeat the corrected date and ask if it is correct. "
+                        "Do not move to preferred_time_raw until date_confirmed is true. "
+                        "Do not finish the call until time_confirmed is true, unless the caller refuses or is unclear after repeated attempts."
+
 
                         "For patient_name, ask for the full name, then repeat only the name and ask if it is correct. "
                         "For reason, ask only why they want the dental visit, and save exactly what the caller says. "
@@ -94,10 +102,10 @@ async def twilio_realtime(websocket: WebSocket):
                         "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
                         "If an answer is unclear, ask the same field again slowly and directly. "
 
-                        "If the caller says no to a repeated name, date, or time, discard the previous value completely. "
-                        "Do not repeat the rejected value again. Ask for the same field again from scratch. "
-                        "For dates, if the caller rejects a date, ask them to say only the date again, slowly, using day number and month. "
-                        "Never keep asking confirmation for the same rejected date. "
+                        "If the caller says no and also provides a corrected name, date, or time, discard the old value, repeat only the corrected value, and ask if it is correct. "
+                        "If the caller says no without providing a correction, discard the old value and ask for the same field again from scratch. "
+                        "Never move to the next field until the current field is clearly confirmed. "
+                        "For dates, confirmation means the caller clearly says yes after you repeat the date. "
 
                         "Never guess, invent, translate, or autocorrect unclear speech into a likely answer. "
                         "If a field is unclear or unconfirmed, set that field to null, explain uncertainty in notes, and use confidence below 0.6. "
@@ -189,9 +197,9 @@ async def twilio_realtime(websocket: WebSocket):
                             },
                             "turn_detection": {
                                 "type": "server_vad",
-                                "threshold": 0.75,
-                                "prefix_padding_ms": 500,
-                                "silence_duration_ms": 1200,
+                                "threshold": 0.6,
+                                "prefix_padding_ms": 400,
+                                "silence_duration_ms": 700,
                             },
                         },
                         "output": {
@@ -392,9 +400,14 @@ async def twilio_realtime(websocket: WebSocket):
                     print(f"Twilio receive error: {e}")
                     await openai_ws.close()
 
+            handled_tool_call_ids = set()
+            response_active = False
 
             async def receive_from_openai():
                 nonlocal stream_sid, transcript_parts, ai_transcript_buffer, appointment_draft
+
+                handled_tool_call_ids = set()
+                response_active = False
 
                 try:
                     async for openai_message in openai_ws:
@@ -403,6 +416,10 @@ async def twilio_realtime(websocket: WebSocket):
 
                         if event_type in ["session.created", "session.updated"]:
                             print(f"OpenAI event: {event_type}")
+
+                        elif event_type == "response.created":
+                            response_active = True
+                            print("OpenAI event: response.created")
 
                         elif event_type in ["response.audio.delta", "response.output_audio.delta"]:
                             if stream_sid:
@@ -430,7 +447,6 @@ async def twilio_realtime(websocket: WebSocket):
                                 ai_transcript_buffer += transcript_delta
                                 print(f"AI transcript delta: {transcript_delta}")
 
-
                         elif event_type in [
                             "conversation.item.input_audio_transcription.completed",
                             "input_audio_buffer.transcription.completed",
@@ -452,60 +468,83 @@ async def twilio_realtime(websocket: WebSocket):
 
                             ai_transcript_buffer = ""
 
-                        elif event_type in [
-                            "response.function_call_arguments.done",
-                            "response.output_item.done",
-                            "conversation.item.created",
-                        ]:
+                        elif event_type == "response.output_item.done":
                             item = response.get("item") or {}
 
-                            function_name = response.get("name") or item.get("name")
-                            arguments_text = response.get("arguments") or item.get("arguments")
-                            call_id = response.get("call_id") or item.get("call_id")
+                            if item.get("type") != "function_call":
+                                continue
 
-                            item_type = item.get("type")
+                            function_name = item.get("name")
+                            arguments_text = item.get("arguments")
+                            call_id = item.get("call_id")
 
-                            if item_type == "function_call":
-                                function_name = item.get("name")
-                                arguments_text = item.get("arguments")
-                                call_id = item.get("call_id")
+                            if function_name != "save_appointment_draft":
+                                continue
 
-                            if function_name == "save_appointment_draft" and arguments_text:
-                                try:
-                                    tool_args = json.loads(arguments_text)
+                            if not call_id:
+                                print("Function call missing call_id")
+                                continue
 
-                                    for key, value in tool_args.items():
-                                        appointment_draft[key] = value
+                            if call_id in handled_tool_call_ids:
+                                print(f"Skipping duplicate tool call: {call_id}")
+                                continue
 
-                                    print(f"Updated appointment draft from tool call: {appointment_draft}")
+                            handled_tool_call_ids.add(call_id)
 
-                                    if call_id:
-                                        await openai_ws.send(
-                                            json.dumps(
-                                                {
-                                                    "type": "conversation.item.create",
-                                                    "item": {
-                                                        "type": "function_call_output",
-                                                        "call_id": call_id,
-                                                        "output": json.dumps(
-                                                            {
-                                                                "ok": True,
-                                                                "saved": True,
-                                                            }
-                                                        ),
-                                                    },
-                                                }
-                                            )
-                                        )
+                            try:
+                                tool_args = json.loads(arguments_text or "{}")
 
+                                for key, value in tool_args.items():
+                                    appointment_draft[key] = value
 
-                                except Exception as e:
-                                    print(f"Error handling save_appointment_draft tool call: {e}")
+                                print(f"Updated appointment draft from tool call: {appointment_draft}")
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "function_call_output",
+                                                "call_id": call_id,
+                                                "output": json.dumps(
+                                                    {
+                                                        "ok": True,
+                                                        "saved": True,
+                                                    }
+                                                ),
+                                            },
+                                        }
+                                    )
+                                )
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "response.create",
+                                            "response": {
+                                                "output_modalities": ["audio"],
+                                                "instructions": (
+                                                    "Continue the appointment booking flow now. "
+                                                    "Ask exactly one short direct question in the caller's language. "
+                                                    "Do not mention saving, tools, database, or internal systems. "
+                                                    "Do not use transition phrases. "
+                                                    "If the next field is missing, ask for that field only. "
+                                                    "Do not ask for date and time together."
+                                                ),
+                                            },
+                                        }
+                                    )
+                                )
+
+                            except Exception as e:
+                                print(f"Error handling save_appointment_draft tool call: {e}")
 
                         elif event_type == "response.done":
+                            response_active = False
                             print("OpenAI event: response.done")
 
                         elif event_type == "error":
+                            response_active = False
                             print(f"OpenAI error: {response}")
 
                         else:
@@ -513,7 +552,6 @@ async def twilio_realtime(websocket: WebSocket):
 
                 except Exception as e:
                     print(f"OpenAI receive error: {e}")
-
 
             await asyncio.gather(
                 receive_from_twilio(),
