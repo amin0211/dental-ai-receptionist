@@ -74,65 +74,37 @@ async def twilio_realtime(websocket: WebSocket):
                     "model": OPENAI_REALTIME_MODEL,
                     "instructions": (
                         "You are a friendly, concise AI receptionist for Westview Dental in Vancouver, BC. "
-
-                        "Language rule: detect the caller's language and respond in the same language. "
+                        "Detect the caller's language and respond in the same language. "
                         "If the caller speaks Persian/Farsi, respond naturally in Persian/Farsi. "
                         "If the caller speaks English, respond naturally in English. "
-                        "Do not switch languages unless the caller switches or asks you to. "
 
-                        "Your job is to help callers with appointment requests, clinic hours, location questions, "
-                        "and urgent dental concerns. "
-                        "Keep every response short and natural. "
-                        "Ask only one question at a time. "
-                        "Never ask for multiple details in one sentence. "
+                        "Help callers with appointment requests, clinic hours, location questions, and urgent dental concerns. "
+                        "Keep responses short. Ask only one question at a time. "
 
-                        "For appointment requests, collect information step by step in this exact order: "
-                        "1. full name, "
-                        "2. reason for visit, "
-                        "3. preferred date, "
-                        "4. preferred time. "
+                        "For appointment requests, collect details in this order: "
+                        "full name, reason for visit, preferred date, preferred time. "
 
-                        "For Persian/Farsi callers, collect sensitive details in very small pieces because phone transcription may be imperfect. "
-                        "Ask for the full name first. "
-                        "After the caller gives the name, repeat only the name back in the caller's language and ask if it is correct. "
-                        "If the caller says it is not correct or corrects you, ask them to repeat the name slowly. "
+                        "Because phone transcription can be imperfect, never guess, invent, or autocorrect the caller's name, reason, date, or time. "
+                        "If the caller's answer is unclear, noisy, mixed-language, or does not sound like a valid answer, ask them to repeat slowly. "
 
-                        "Then ask for the reason for the visit separately. "
-                        "Do not assume the reason from your own wording. "
-                        "Use only what the caller says as the reason. "
+                        "For full name: ask for the caller's full name, repeat the name back, and ask if it is correct. "
+                        "Save the name only if the caller confirms it. "
 
-                        "Then ask for the preferred date only. "
-                        "Do not ask for date and time together. "
-                        "After the caller gives the date, repeat only the date back and ask if it is correct. "
-                        "If the caller says it is not correct or corrects you, ask them to repeat the date slowly. "
+                        "For reason: ask for the reason separately. Use only what the caller says. Do not infer the reason from your own wording. "
 
-                        "Only after the date is confirmed, ask for the preferred time separately. "
-                        "After the caller gives the time, repeat only the time back and ask if it is correct. "
-                        "If the caller says it is not correct or corrects you, ask them to repeat the time slowly. "
+                        "For date and time: never ask for both together. "
+                        "Ask for the preferred date first, repeat it back, and ask if it is correct. "
+                        "Only after the date is confirmed, ask for the preferred time, repeat it back, and ask if it is correct. "
 
-                        "For English callers, follow the same step-by-step process: "
-                        "full name, reason, preferred date, preferred time. "
-                        "Repeat back the date and time separately and ask for confirmation before saying the request has been noted. "
+                        "Use the save_appointment_draft tool only for details that were clearly provided and confirmed. "
+                        "If any important field is unclear or unconfirmed, set that field to null, explain the uncertainty in notes, and use confidence below 0.6. "
+                        "Use confidence above 0.85 only when the caller clearly confirmed the saved details. "
 
                         "Do not claim the appointment is confirmed. "
-                        "Only say the appointment request has been noted and the front desk will contact them to confirm. "
+                        "Say only that the request has been noted and the front desk will contact them to confirm. "
 
-                        "Do not say the appointment request has been captured until the caller has confirmed the preferred date and preferred time, "
-                        "or until they clearly say they do not have a preference. "
-
-                        "Do not read the caller's full phone number out loud. "
-                        "If needed, ask whether the number they are calling from is the best callback number. "
-
-                        "For urgent dental concerns such as severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, "
-                        "advise the caller to seek emergency medical care immediately and tell them the clinic team will be notified. "
-
-                        "Do not interrupt the caller. Wait until the caller clearly finishes speaking before responding."
-
-                        "Use the save_appointment_draft tool whenever the caller provides or confirms appointment information. "
-                        "For name and reason, call the tool after the caller provides the value. "
-                        "For date and time, call the tool only after you repeat the value back and the caller confirms it. "
-                        "Do not call the tool with unconfirmed date or time unless the caller clearly says they have no preference. "
-
+                        "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately. "
+                        "Do not mention tools, databases, or internal systems."
                     ),
 
                     "output_modalities": ["audio"],
@@ -141,10 +113,9 @@ async def twilio_realtime(websocket: WebSocket):
                             "type": "function",
                             "name": "save_appointment_draft",
                             "description": (
-                                "Use this tool to save structured appointment details during the call. "
-                                "Call it only after the caller provides or confirms a piece of information. "
-                                "For date and time, call it only after repeating the understood value back to the caller "
-                                "and the caller confirms it is correct."
+                                "Save structured appointment details only after the caller clearly confirms them. "
+                                "Never guess or autocorrect unclear speech. "
+                                "If a field is unclear or unconfirmed, set it to null, explain the uncertainty in notes, and lower confidence."
                             ),
                             "parameters": {
                                 "type": "object",
@@ -312,9 +283,15 @@ async def twilio_realtime(websocket: WebSocket):
                                     if line.startswith("Caller:")
                                 )
 
+
+                                service_match_input = caller_only_transcript
+
+                                if appointment_draft.get("reason"):
+                                    service_match_input += "\n" + appointment_draft.get("reason")
+
                                 service_match = match_service_from_transcript(
                                     current_clinic_id,
-                                    caller_only_transcript,
+                                    service_match_input,
                                 )
 
                                 appointment_details = extract_appointment_details_from_transcript(
@@ -327,22 +304,32 @@ async def twilio_realtime(websocket: WebSocket):
                                     clinic_id=current_clinic_id,
                                     call_id=current_call_id,
                                     raw_transcript=full_transcript,
-                                    cleaned_transcript=None,
-                                    detected_language=None,
-                                    patient_name=appointment_details["patient_name"],
+                                    cleaned_transcript=appointment_draft.get("notes"),
+                                    detected_language=appointment_draft.get("language"),
+                                    patient_name=appointment_draft.get("patient_name") or appointment_details["patient_name"],
                                     service_category=service_match["category_name"] if service_match else None,
-                                    canonical_reason=service_match["canonical_reason"] if service_match else None,
-                                    preferred_time_raw=appointment_details["preferred_time"],
+                                    canonical_reason=(
+                                        service_match["canonical_reason"]
+                                        if service_match
+                                        else appointment_draft.get("reason")
+                                    ),
+                                    preferred_time_raw=(
+                                        appointment_draft.get("preferred_time_raw")
+                                        or appointment_details["preferred_time"]
+                                    ),
                                     preferred_datetime=None,
                                     urgency=service_match["default_urgency"] if service_match else "normal",
-                                    confidence=None,
-                                    extraction_notes="Initial extraction using DB keyword match and transcript context.",
+                                    confidence=appointment_draft.get("confidence"),
+                                    extraction_notes=json.dumps(appointment_draft, ensure_ascii=False),
                                 )
+
 
                                 should_create_request = (
                                     (service_match and service_match["creates_appointment_request"])
                                     or bool(appointment_draft.get("reason"))
                                 )
+
+
 
                                 if should_create_request:
                                     create_appointment_request(
@@ -356,7 +343,10 @@ async def twilio_realtime(websocket: WebSocket):
                                             else appointment_draft.get("reason")
                                         ),
                                         preferred_time=(
-                                            appointment_draft.get("preferred_time_raw")
+                                            (
+                                                (appointment_draft.get("preferred_date_raw") or "") + " " +
+                                                (appointment_draft.get("preferred_time_raw") or "")
+                                            ).strip()
                                             or appointment_details["preferred_time"]
                                         ),
                                         urgency=service_match["default_urgency"] if service_match else "normal",
@@ -465,8 +455,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     tool_args = json.loads(arguments_text)
 
                                     for key, value in tool_args.items():
-                                        if value is not None:
-                                            appointment_draft[key] = value
+                                        appointment_draft[key] = value
 
                                     print(f"Updated appointment draft from tool call: {appointment_draft}")
 
