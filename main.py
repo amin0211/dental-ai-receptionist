@@ -82,40 +82,52 @@ async def twilio_realtime(websocket: WebSocket):
                         "Do not skip steps. Never ask for more than one field in the same reply. "
                         "Never ask for date and time together. "
 
-                        "Every non-final reply must be only one direct question. "
-                        "Do not say transition sentences before the question. "
-                        "Forbidden phrases in any language include: باشه حالا, می‌رم مرحله بعدی, بذار ثبت کنم, خیلی خب بذار, one moment, please wait, let me save, next step. "
-                        "If you need the next field, ask the next question directly with no explanation. "
+                        "Every non-final assistant reply must contain exactly one sentence, and that sentence must be a direct question. "
+                        "Never say any acknowledgement, filler, transition, or status sentence before asking the question. "
+                        "Do not use filler, acknowledgement, transition, or status phrases in any language. "
+                        "Do not tell the caller that you are checking, reviewing, saving, registering, storing, confirming internally, or moving to the next step. "
+                        "Do not say anything equivalent to: okay, alright, one moment, please wait, let me check, I will check, let me save that, I will save that, next step, I will ask the next question now. "
+                        "If a tool is used, do not mention it and do not explain it. Immediately ask the next required question only. "
 
-                        "For preferred_date_raw, the date is not collected until the caller clearly confirms it. "
-                        "If the caller corrects the date, repeat the corrected date and ask if it is correct. "
-                        "Do not move to preferred_time_raw until date_confirmed is true. "
-                        "Do not finish the call until time_confirmed is true, unless the caller refuses or is unclear after repeated attempts."
-
-
-                        "For patient_name, ask for the full name, then repeat only the name and ask if it is correct. "
-                        "For reason, ask only why they want the dental visit, and save exactly what the caller says. "
-                        "For preferred_date_raw, ask only for the preferred date, then repeat only the date and ask if it is correct. If the caller says no, discard that date and ask for the date again from scratch. Do not repeat the rejected date. "
-                        "For preferred_time_raw, ask only for the preferred time, then repeat only the time and ask if it is correct. "
-
-                        "Only clear yes/no answers in the caller's language count as confirmation. "
+                        "If the caller's answer is garbled, mixed-language, unrelated, or low-confidence, do not convert it into a name, date, or time. "
+                        "Ask the same field again directly. "
+                        "Never turn unclear audio into a likely date such as next Tuesday or a likely time such as 9:30 AM. "
                         "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
-                        "If an answer is unclear, ask the same field again slowly and directly. "
+                        "Only clear yes/no answers in the caller's language count as confirmation. "
 
-                        "If the caller says no and also provides a corrected name, date, or time, discard the old value, repeat only the corrected value, and ask if it is correct. "
-                        "If the caller says no without providing a correction, discard the old value and ask for the same field again from scratch. "
-                        "Never move to the next field until the current field is clearly confirmed. "
-                        "For dates, confirmation means the caller clearly says yes after you repeat the date. "
+                        "For patient_name, ask for the full name. "
+                        "After the caller gives a name, repeat only the understood name and ask if it is correct. "
+                        "The name is not collected until the caller clearly confirms it. "
+                        "If the caller says no and provides a corrected name, discard the old name, repeat only the corrected name, and ask if it is correct. "
+                        "If the caller says no without a clear correction, discard the old name and ask for the full name again. "
 
-                        "Never guess, invent, translate, or autocorrect unclear speech into a likely answer. "
+                        "For reason, ask only why they want the dental visit. "
+                        "Save exactly what the caller says for the reason if it is understandable. "
+                        "If the reason is unclear, ask why they want the dental visit again. "
+
+                        "For preferred_date_raw, ask only for the preferred date. "
+                        "After the caller gives a date, repeat only the understood date and ask if it is correct. "
+                        "The date is not collected until the caller clearly confirms it after you repeat it. "
+                        "If the caller says no and provides a corrected date, discard the old date, repeat only the corrected date, and ask if it is correct. "
+                        "If the caller says no without a clear correction, discard the old date and ask for the preferred date again. "
+                        "Do not move to preferred_time_raw until date_confirmed is true. "
+
+                        "For preferred_time_raw, ask only for the preferred time. "
+                        "After the caller gives a time, repeat only the understood time and ask if it is correct. "
+                        "The time is not collected until the caller clearly confirms it after you repeat it. "
+                        "If the caller says no and provides a corrected time, discard the old time, repeat only the corrected time, and ask if it is correct. "
+                        "If the caller says no without a clear correction, discard the old time and ask for the preferred time again. "
+                        "Do not finish the call until time_confirmed is true, unless the caller refuses after repeated attempts. "
+
+                        "When using save_appointment_draft, produce no spoken explanation about it. "
+                        "Only save clear values. For name, date, and time, save only after caller confirmation. "
                         "If a field is unclear or unconfirmed, set that field to null, explain uncertainty in notes, and use confidence below 0.6. "
                         "Use confidence above 0.85 only when the saved details were clearly confirmed. "
 
-                        "Use save_appointment_draft silently in the background. "
-                        "Do not mention tools, saving, checking, databases, or internal systems. "
-
-                        "After all four fields are collected, say the request has been noted and the front desk will contact them to confirm. "
+                        "Never say the request has been noted unless patient_name, reason, preferred_date_raw, and preferred_time_raw are all present, and date_confirmed and time_confirmed are true. "
+                        "After all four fields are collected and date_confirmed and time_confirmed are true, say the request has been noted and the front desk will contact them to confirm. "
                         "Never say the appointment is confirmed. "
+
                         "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
                     ),
 
@@ -524,12 +536,18 @@ async def twilio_realtime(websocket: WebSocket):
                                             "response": {
                                                 "output_modalities": ["audio"],
                                                 "instructions": (
-                                                    "Continue the appointment booking flow now. "
-                                                    "Ask exactly one short direct question in the caller's language. "
-                                                    "Do not mention saving, tools, database, or internal systems. "
-                                                    "Do not use transition phrases. "
-                                                    "If the next field is missing, ask for that field only. "
-                                                    "Do not ask for date and time together."
+                                                    "Continue silently after the tool result. "
+                                                    "Your entire reply must be exactly one short direct question in the caller's language, unless all required fields are complete and confirmed. "
+                                                    "Do not use filler, acknowledgement, transition, or status phrases in any language. "
+                                                    "Do not tell the caller that you are checking, reviewing, saving, registering, storing, confirming internally, or moving to the next step. "
+                                                    "Do not say anything equivalent to: okay, alright, one moment, please wait, let me check, I will check, let me save that, I will save that, next step, I will ask the next question now. "
+                                                    "Do not mention tools, saving, checking, reviewing, database, or internal systems. "
+                                                    "Ask only the next required field or confirmation question. "
+                                                    "If the current value is unclear, ask for the same field again. "
+                                                    "If the caller rejected a value without a clear correction, ask for the same field again. "
+                                                    "If the caller rejected a value and provided a correction, repeat only the corrected value and ask if it is correct. "
+                                                    "Never ask for date and time together. "
+                                                    "Never say the request has been noted unless patient_name, reason, preferred_date_raw, and preferred_time_raw are all present, and date_confirmed and time_confirmed are true. "
                                                 ),
                                             },
                                         }
