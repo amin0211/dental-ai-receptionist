@@ -53,6 +53,7 @@ async def twilio_realtime(websocket: WebSocket):
     ai_transcript_buffer = ""
     current_clinic_id = None
     current_caller_phone = None
+    appointment_draft = {}
 
     openai_url = f"wss://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
 
@@ -126,9 +127,81 @@ async def twilio_realtime(websocket: WebSocket):
                         "advise the caller to seek emergency medical care immediately and tell them the clinic team will be notified. "
 
                         "Do not interrupt the caller. Wait until the caller clearly finishes speaking before responding."
+
+                        "Use the save_appointment_draft tool whenever the caller provides or confirms appointment information. "
+                        "For name and reason, call the tool after the caller provides the value. "
+                        "For date and time, call the tool only after you repeat the value back and the caller confirms it. "
+                        "Do not call the tool with unconfirmed date or time unless the caller clearly says they have no preference. "
+
                     ),
 
                     "output_modalities": ["audio"],
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "save_appointment_draft",
+                            "description": (
+                                "Use this tool to save structured appointment details during the call. "
+                                "Call it only after the caller provides or confirms a piece of information. "
+                                "For date and time, call it only after repeating the understood value back to the caller "
+                                "and the caller confirms it is correct."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "patient_name": {
+                                        "type": ["string", "null"],
+                                        "description": "The caller's full name, only if provided or confirmed."
+                                    },
+                                    "reason": {
+                                        "type": ["string", "null"],
+                                        "description": "The reason for visit, such as filling, checkup, cleaning, tooth pain, or the original phrase."
+                                    },
+                                    "preferred_date_raw": {
+                                        "type": ["string", "null"],
+                                        "description": "The preferred appointment date as understood and confirmed, e.g. June 21."
+                                    },
+                                    "preferred_time_raw": {
+                                        "type": ["string", "null"],
+                                        "description": "The preferred appointment time as understood and confirmed, e.g. 3 PM."
+                                    },
+                                    "date_confirmed": {
+                                        "type": "boolean",
+                                        "description": "True only if the caller confirmed the date."
+                                    },
+                                    "time_confirmed": {
+                                        "type": "boolean",
+                                        "description": "True only if the caller confirmed the time."
+                                    },
+                                    "language": {
+                                        "type": ["string", "null"],
+                                        "description": "Caller language, such as fa or en."
+                                    },
+                                    "confidence": {
+                                        "type": "number",
+                                        "description": "Confidence from 0 to 1."
+                                    },
+                                    "notes": {
+                                        "type": ["string", "null"],
+                                        "description": "Short note about uncertainty, corrections, or transcription issues."
+                                    }
+                                },
+                                "required": [
+                                    "patient_name",
+                                    "reason",
+                                    "preferred_date_raw",
+                                    "preferred_time_raw",
+                                    "date_confirmed",
+                                    "time_confirmed",
+                                    "language",
+                                    "confidence",
+                                    "notes"
+                                ],
+                                "additionalProperties": False
+                            },
+                        }
+                    ],
+                    "tool_choice": "auto",                    
                     "audio": {
                         "input": {
                             "format": {
@@ -247,7 +320,9 @@ async def twilio_realtime(websocket: WebSocket):
                                 appointment_details = extract_appointment_details_from_transcript(
                                     full_transcript
                                 )
-
+                                
+                                print(f"Final appointment draft: {appointment_draft}")
+                                
                                 save_call_extraction(
                                     clinic_id=current_clinic_id,
                                     call_id=current_call_id,
@@ -264,21 +339,33 @@ async def twilio_realtime(websocket: WebSocket):
                                     extraction_notes="Initial extraction using DB keyword match and transcript context.",
                                 )
 
-                                if service_match and service_match["creates_appointment_request"]:
+                                should_create_request = (
+                                    (service_match and service_match["creates_appointment_request"])
+                                    or bool(appointment_draft.get("reason"))
+                                )
+
+                                if should_create_request:
                                     create_appointment_request(
                                         clinic_id=current_clinic_id,
                                         call_id=current_call_id,
                                         patient_phone=current_caller_phone,
-                                        patient_name=appointment_details["patient_name"],
-                                        reason=service_match["canonical_reason"],
-                                        preferred_time=appointment_details["preferred_time"],
-                                        urgency=service_match["default_urgency"],
+                                        patient_name=appointment_draft.get("patient_name") or appointment_details["patient_name"],
+                                        reason=(
+                                            service_match["canonical_reason"]
+                                            if service_match
+                                            else appointment_draft.get("reason")
+                                        ),
+                                        preferred_time=(
+                                            appointment_draft.get("preferred_time_raw")
+                                            or appointment_details["preferred_time"]
+                                        ),
+                                        urgency=service_match["default_urgency"] if service_match else "normal",
                                         status="new",
                                     )
 
                                     print(
-                                        "Realtime appointment request created from DB service match: "
-                                        f"service={service_match}, details={appointment_details}"
+                                        "Realtime appointment request created from structured draft: "
+                                        f"service={service_match}, details={appointment_details}, draft={appointment_draft}"
                                     )
                                 else:
                                     print(f"No appointment request created. service_match={service_match}")
@@ -297,7 +384,7 @@ async def twilio_realtime(websocket: WebSocket):
 
 
             async def receive_from_openai():
-                nonlocal stream_sid, transcript_parts, ai_transcript_buffer
+                nonlocal stream_sid, transcript_parts, ai_transcript_buffer, appointment_draft
 
                 try:
                     async for openai_message in openai_ws:
@@ -354,6 +441,70 @@ async def twilio_realtime(websocket: WebSocket):
                                 print(f"AI transcript completed: {final_ai_transcript.strip()}")
 
                             ai_transcript_buffer = ""
+
+                        elif event_type in [
+                            "response.function_call_arguments.done",
+                            "response.output_item.done",
+                            "conversation.item.created",
+                        ]:
+                            item = response.get("item") or {}
+
+                            function_name = response.get("name") or item.get("name")
+                            arguments_text = response.get("arguments") or item.get("arguments")
+                            call_id = response.get("call_id") or item.get("call_id")
+
+                            item_type = item.get("type")
+
+                            if item_type == "function_call":
+                                function_name = item.get("name")
+                                arguments_text = item.get("arguments")
+                                call_id = item.get("call_id")
+
+                            if function_name == "save_appointment_draft" and arguments_text:
+                                try:
+                                    tool_args = json.loads(arguments_text)
+
+                                    for key, value in tool_args.items():
+                                        if value is not None:
+                                            appointment_draft[key] = value
+
+                                    print(f"Updated appointment draft from tool call: {appointment_draft}")
+
+                                    if call_id:
+                                        await openai_ws.send(
+                                            json.dumps(
+                                                {
+                                                    "type": "conversation.item.create",
+                                                    "item": {
+                                                        "type": "function_call_output",
+                                                        "call_id": call_id,
+                                                        "output": json.dumps(
+                                                            {
+                                                                "ok": True,
+                                                                "saved": True,
+                                                            }
+                                                        ),
+                                                    },
+                                                }
+                                            )
+                                        )
+
+                                        await openai_ws.send(
+                                            json.dumps(
+                                                {
+                                                    "type": "response.create",
+                                                    "response": {
+                                                        "instructions": (
+                                                            "Briefly continue the phone conversation naturally. "
+                                                            "Do not mention internal tools or databases."
+                                                        )
+                                                    },
+                                                }
+                                            )
+                                        )
+
+                                except Exception as e:
+                                    print(f"Error handling save_appointment_draft tool call: {e}")
 
                         elif event_type == "response.done":
                             print("OpenAI event: response.done")
