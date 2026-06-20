@@ -115,21 +115,28 @@ async def twilio_realtime(websocket: WebSocket):
                     "For preferred_date_raw, ask only for the preferred date. "
                     "After the caller gives a clear date, repeat only the understood date and ask if it is correct. "
                     "The date is not collected until the caller clearly confirms it after you repeat it. "
+                    "If the caller says no, no matter the language, the date is rejected and not confirmed. "
                     "If the caller says no and provides a corrected date, discard the old date, repeat only the corrected date, and ask if it is correct. "
                     "If the caller says no without a clear correction, discard the old date and ask for the preferred date again. "
-                    "If the date remains unclear after two attempts, continue to preferred_time_raw and let the front desk confirm the date later. "
+                    "Do not move to preferred_time_raw until the preferred date has been clearly confirmed. "
 
                     "For preferred_time_raw, ask only for the preferred time. "
                     "After the caller gives a clear time, repeat only the understood time and ask if it is correct. "
                     "The time is not collected until the caller clearly confirms it after you repeat it. "
+                    "If the caller says no, no matter the language, the time is rejected and not confirmed. "
                     "If the caller says no and provides a corrected time, discard the old time, repeat only the corrected time, and ask if it is correct. "
                     "If the caller says no without a clear correction, discard the old time and ask for the preferred time again. "
-                    "If the time remains unclear after two attempts, finish politely and say the front desk will contact them to confirm the missing details. "
+                    "Do not finish the call after a rejected time. "
+                    "Do not say the request has been noted until the preferred time has been clearly confirmed. "
 
                     "Never say the request has been noted unless all required fields for the current clinic context have been attempted. "
                     "If the clinic has multiple doctors, preferred_doctor_name must also be attempted before the request can be noted. "
                     "If some details are unclear after repeated attempts, say the front desk will contact them to confirm the missing details. "
-                    "After all required fields have been attempted, say the request has been noted and the front desk will contact them to confirm. "
+
+                    "Do not say the request has been noted until preferred_date_raw and preferred_time_raw have both been clearly confirmed by the caller. "
+                    "If the clinic has multiple doctors, preferred_doctor_name must also be clearly answered before the request can be noted. "
+                    "Only after the doctor preference, confirmed date, and confirmed time are collected, say the request has been noted and the front desk will contact them to confirm. "
+
                     "Never say the appointment is confirmed. "
 
                     "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
@@ -184,13 +191,16 @@ async def twilio_realtime(websocket: WebSocket):
                                     "For appointment booking, preferred_doctor_name is required before reason. "
                                     "Your first appointment-booking question MUST ask which doctor the caller prefers, or whether they have no preference. "
                                     "Do not ask the reason until the caller has either chosen a doctor or said they have no preference. "
+                                    "Do not accept unclear, unrelated, random, or garbled answers as a doctor choice. "
+                                    "If the caller gives an unclear answer such as random words, mixed-language fragments, or unrelated sounds, ask the doctor question again. "
+                                    "If the caller mentions a doctor at any later point, treat it as preferred_doctor_name and update the doctor preference. "
+                                    "Do not treat a doctor name as the visit reason. "
                                     "The appointment collection order is: preferred_doctor_name, reason, preferred_date_raw, preferred_time_raw. "
                                     "Ask only one direct question at a time. "
                                     "If the caller says they have no preference, accept it and continue to reason. "
                                     "Do not force the caller to choose a doctor. "
                                     "Do not ask for the patient's name. "
                                 )
-
                             else:
                                 doctor_context = (
                                     " IMPORTANT CLINIC CONTEXT: "
@@ -295,7 +305,8 @@ async def twilio_realtime(websocket: WebSocket):
                                 # This is NOT realtime tool calling.
                                 # It runs only after the phone call has ended.
                                 appointment_details = await extract_appointment_details_with_openai(
-                                    full_transcript
+                                    full_transcript,
+                                    current_doctors,
                                 )
 
                                 preferred_doctor_name = appointment_details.get("preferred_doctor_name")
@@ -342,9 +353,14 @@ async def twilio_realtime(websocket: WebSocket):
                                 preferred_date_raw = appointment_details.get("preferred_date_raw")
                                 preferred_time_raw = appointment_details.get("preferred_time_raw")
 
-                                date_confirmed = appointment_details.get("date_confirmed")
-                                time_confirmed = appointment_details.get("time_confirmed")
+                                date_confirmed = bool(appointment_details.get("date_confirmed"))
+                                time_confirmed = bool(appointment_details.get("time_confirmed"))
+                                if not date_confirmed:
+                                    preferred_date_raw = None
 
+                                if not time_confirmed:
+                                    preferred_time_raw = None
+                                    
                                 preferred_time_combined = (
                                     ((preferred_date_raw or "") + " " + (preferred_time_raw or "")).strip()
                                     or None
@@ -875,7 +891,10 @@ async def collect_time(request: Request):
 
 
 
-async def extract_appointment_details_with_openai(transcript: str) -> dict:
+async def extract_appointment_details_with_openai(
+    transcript: str,
+    doctors: list[dict] | None = None,
+) -> dict:
     if not openai_client:
         return {
             "patient_name": None,
@@ -892,7 +911,15 @@ async def extract_appointment_details_with_openai(transcript: str) -> dict:
             "confidence": 0.0,
             "notes": "OpenAI client is not initialized.",
         }
+    doctor_names = []
 
+    for doctor in doctors or []:
+        name = doctor.get("display_name") or doctor.get("full_name")
+        if name:
+            doctor_names.append(name)
+
+    doctor_list_text = ", ".join(doctor_names) if doctor_names else "No doctor list provided."
+    
     schema = {
         "type": "object",
         "properties": {
@@ -975,15 +1002,27 @@ async def extract_appointment_details_with_openai(transcript: str) -> dict:
                 "content": (
                     "Extract structured appointment details from this phone call transcript. "
                     "Use only information supported by the transcript. "
-                    "Do not guess or invent names, doctor names, dates, times, or reasons. "
-                    "If the transcript shows that the assistant asked for a preferred doctor, extract the doctor's name or 'no preference'. "
-                    "If the caller did not clearly choose a doctor, set preferred_doctor_name to null. "
-                    "If the assistant repeated a value and the caller clearly agreed, mark that field as confirmed. "
-                    "If the caller rejected a value, do not save the rejected value. "
+                    "Do not guess or invent patient names, doctor names, dates, times, or reasons. "
+
+                    f"The available doctors for this clinic are: {doctor_list_text}. "
+                    "If the caller says a doctor name approximately, phonetically, partially, or in another language, "
+                    "match it to the closest available doctor from the provided doctor list. "
+                    "For example, Robert, Roberts, Rabert, or دکتر رابرت should match Dr. Roberts if Dr. Roberts is in the list. "
+                    "If the caller first gives an unclear doctor answer, but later clearly mentions a doctor, use the later clear doctor. "
+                    "If the caller clearly says no preference, set preferred_doctor_name to 'no preference'. "
+                    "If the caller did not clearly choose a doctor and did not say no preference, set preferred_doctor_name to null. "
+
+                    "For date and time confirmation, only mark date_confirmed or time_confirmed true if the assistant repeated that value "
+                    "and the caller clearly agreed directly after that confirmation question. "
+                    "Answers like yes, yeah, correct, درست, بله, آره, ja, oui count as confirmation. "
+                    "Answers like no, nope, نه, いや count as rejection. "
+
+                    "If the caller rejected a repeated date or time, do not save the rejected value. "
                     "If the caller corrected a value and then confirmed it, save the corrected value. "
                     "If a value is unclear, garbled, mixed-language, or uncertain, set it to null and explain in notes. "
+
                     "For reason, explicit yes/no confirmation is not required if the caller's reason was understandable."
-                ),
+                )
             },
             {
                 "role": "user",
