@@ -83,11 +83,9 @@ async def twilio_realtime(websocket: WebSocket):
                     "Do not switch languages because of one random foreign-looking transcript fragment. "
                     "Keep every reply short. Ask exactly one question at a time. "
 
-                    # "For appointment booking, collect fields in this exact order: "
-                    # "patient_name, reason, preferred_date_raw, preferred_time_raw. "
-                    "For appointment booking, collect fields in this exact order by default: "
-                    "reason, preferred_date_raw, preferred_time_raw. "
-                    "If later clinic context says this clinic has multiple doctors, collect preferred_doctor_name before reason. "
+                    "For appointment booking, follow the clinic context collection order exactly. "
+                    "If the clinic context says there are multiple doctors, preferred_doctor_name is required before reason. "
+                    "If the clinic context says there are zero or one active doctor, do not ask for preferred_doctor_name. "
                     "Do not ask for the patient's name. "
 
                     "Do not skip steps. Never ask for more than one field in the same reply. "
@@ -106,13 +104,6 @@ async def twilio_realtime(websocket: WebSocket):
                     "Never turn unclear audio into a likely date such as next Tuesday, next Monday, April 22, April 15, or a likely time such as 3 PM or 9:30 AM. "
                     "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
                     "Only clear yes/no answers in the caller's language count as confirmation. "
-
-                    # "For patient_name, ask for the full name. "
-                    # "If the caller gives a clear name, repeat only the understood name and ask if it is correct. "
-                    # "If the caller clearly confirms the repeated name, move to reason. "
-                    # "If the caller gives a clear correction, use the corrected name and move to reason. "
-                    # "If the caller says no without a clear correction, ask for the full name again. "
-                    # "If the name remains unclear after two attempts, continue to reason and let the front desk confirm the name later. "
 
                     "For reason, ask only why they want the dental visit. "
                     "If the reason is understandable, accept it and move to preferred_date_raw. "
@@ -134,49 +125,14 @@ async def twilio_realtime(websocket: WebSocket):
                     "If the caller says no without a clear correction, discard the old time and ask for the preferred time again. "
                     "If the time remains unclear after two attempts, finish politely and say the front desk will contact them to confirm the missing details. "
 
-                    # "Never say the request has been noted unless at least patient_name, reason, preferred_date_raw, and preferred_time_raw have been attempted. "
-                    "Never say the request has been noted unless reason, preferred_date_raw, and preferred_time_raw have been attempted. "
+                    "Never say the request has been noted unless all required fields for the current clinic context have been attempted. "
+                    "If the clinic has multiple doctors, preferred_doctor_name must also be attempted before the request can be noted. "
                     "If some details are unclear after repeated attempts, say the front desk will contact them to confirm the missing details. "
                     "After all required fields have been attempted, say the request has been noted and the front desk will contact them to confirm. "
                     "Never say the appointment is confirmed. "
 
                     "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
                 )
-
-            session_update = {
-                "type": "session.update",
-                "session": {
-                    "type": "realtime",
-                    "model": OPENAI_REALTIME_MODEL,
-                    "instructions": BASE_REALTIME_INSTRUCTIONS,
-
-                    "output_modalities": ["audio"],
-                
-                    "audio": {
-                        "input": {
-                            "format": {
-                                "type": "audio/pcmu",
-                            },
-                            "transcription": {
-                                "model": "gpt-4o-transcribe",#"gpt-4o-mini-transcribe",
-                            },
-                            "turn_detection": {
-                                "type": "server_vad",
-                                "threshold": 0.5,
-                                "prefix_padding_ms": 600,
-                                "silence_duration_ms": 700,
-                            },
-                        },
-                        "output": {
-                            "format": {
-                                "type": "audio/pcmu",
-                            },
-                            "voice": "alloy",
-                        },
-                    },
-                    "tracing": "auto",
-                },
-            }
 
             await openai_ws.send(json.dumps(session_update))
             print("Sent OpenAI session.update")
@@ -225,43 +181,65 @@ async def twilio_realtime(websocket: WebSocket):
                                     if doctor.get("display_name") or doctor.get("full_name")
                                 ]
 
-                                doctor_context_update = {
-                                    "type": "session.update",
-                                    "session": {
-                                        "instructions": (
-                                            BASE_REALTIME_INSTRUCTIONS
-                                            + " Additional clinic context: "
-                                            + f"This clinic has multiple active doctors: {', '.join(doctor_names)}. "
-                                            + "For appointment booking, first ask which doctor the caller prefers. "
-                                            + "The appointment collection order is: preferred_doctor_name, reason, preferred_date_raw, preferred_time_raw. "
-                                            + "Ask only one direct question at a time. "
-                                            + "If the caller says they have no preference, accept it and continue to reason. "
-                                            + "Do not force the caller to choose a doctor. "
-                                            + "Do not ask for the patient's name."
-                                        )
-                                    },
-                                }
-                                await openai_ws.send(json.dumps(doctor_context_update))
-                                print("Sent doctor list context to OpenAI Realtime")
+                                doctor_context = (
+                                    " IMPORTANT CLINIC CONTEXT: "
+                                    f"This clinic has multiple active doctors: {', '.join(doctor_names)}. "
+                                    "For appointment booking, preferred_doctor_name is required before reason. "
+                                    "Your first appointment-booking question MUST ask which doctor the caller prefers, or whether they have no preference. "
+                                    "Do not ask the reason until the caller has either chosen a doctor or said they have no preference. "
+                                    "The appointment collection order is: preferred_doctor_name, reason, preferred_date_raw, preferred_time_raw. "
+                                    "Ask only one direct question at a time. "
+                                    "If the caller says they have no preference, accept it and continue to reason. "
+                                    "Do not force the caller to choose a doctor. "
+                                    "Do not ask for the patient's name. "
+                                )
 
                             else:
-                                no_doctor_context_update = {
-                                    "type": "session.update",
-                                    "session": {
-                                        "instructions": (
-                                            BASE_REALTIME_INSTRUCTIONS
-                                            + " Additional clinic context: "
-                                            + "This clinic has zero or one active doctor. "
-                                            + "Do not ask which doctor the caller prefers. "
-                                            + "For appointment booking, collect only reason, preferred_date_raw, and preferred_time_raw. "
-                                            + "Do not ask for the patient's name."
-                                        )
-                                    },
-                                }
+                                doctor_context = (
+                                    " IMPORTANT CLINIC CONTEXT: "
+                                    "This clinic has zero or one active doctor. "
+                                    "Do not ask which doctor the caller prefers. "
+                                    "The appointment collection order is: reason, preferred_date_raw, preferred_time_raw. "
+                                    "Do not ask for the patient's name. "
+                                )
 
-                                await openai_ws.send(json.dumps(no_doctor_context_update))
-                                print("Sent no-doctor-choice context to OpenAI Realtime")
-                                
+                            session_update = {
+                                "type": "session.update",
+                                "session": {
+                                    "type": "realtime",
+                                    "model": OPENAI_REALTIME_MODEL,
+                                    "instructions": BASE_REALTIME_INSTRUCTIONS + doctor_context,
+                                    "output_modalities": ["audio"],
+                                    "audio": {
+                                        "input": {
+                                            "format": {
+                                                "type": "audio/pcmu",
+                                            },
+                                            "transcription": {
+                                                "model": "gpt-4o-transcribe",
+                                            },
+                                            "turn_detection": {
+                                                "type": "server_vad",
+                                                "threshold": 0.5,
+                                                "prefix_padding_ms": 600,
+                                                "silence_duration_ms": 700,
+                                            },
+                                        },
+                                        "output": {
+                                            "format": {
+                                                "type": "audio/pcmu",
+                                            },
+                                            "voice": "alloy",
+                                        },
+                                    },
+                                    "tracing": "auto",
+                                },
+                            }
+
+                            await openai_ws.send(json.dumps(session_update))
+                            print("Sent OpenAI session.update with clinic doctor context")
+                            
+                                                          
                             saved_call = save_call_to_db(
                                 clinic_id=clinic_id,
                                 twilio_call_sid=call_sid,
