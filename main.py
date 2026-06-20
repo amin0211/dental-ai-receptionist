@@ -96,6 +96,11 @@ async def twilio_realtime(websocket: WebSocket):
                         "After all four fields are collected, say the request has been noted and the front desk will contact them to confirm. "
                         "Never say the appointment is confirmed. Do not mention tools, databases, or internal systems. "
 
+                        "After saving reason, the next question must ask for preferred date only. "
+                        "After saving preferred date, the next question must ask for date confirmation only. "
+                        "After date is confirmed, the next question must ask for preferred time only. "
+                        "Never ask for reason, date, and time in the same response. "
+
                         "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
                     ),
                     "output_modalities": ["audio"],
@@ -485,19 +490,6 @@ async def twilio_realtime(websocket: WebSocket):
                                             )
                                         )
 
-                                        await openai_ws.send(
-                                            json.dumps(
-                                                {
-                                                    "type": "response.create",
-                                                    "response": {
-                                                        "instructions": (
-                                                            "Briefly continue the phone conversation naturally. "
-                                                            "Do not mention internal tools or databases."
-                                                        )
-                                                    },
-                                                }
-                                            )
-                                        )
 
                                 except Exception as e:
                                     print(f"Error handling save_appointment_draft tool call: {e}")
