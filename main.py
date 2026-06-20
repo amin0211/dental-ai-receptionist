@@ -321,6 +321,9 @@ async def twilio_realtime(websocket: WebSocket):
                                     urgency=service_match["default_urgency"] if service_match else "normal",
                                     confidence=appointment_draft.get("confidence"),
                                     extraction_notes=json.dumps(appointment_draft, ensure_ascii=False),
+                                    preferred_date_raw=appointment_draft.get("preferred_date_raw"),
+                                    preferred_date_confirmed=appointment_draft.get("date_confirmed"),
+                                    preferred_time_confirmed=appointment_draft.get("time_confirmed"),
                                 )
 
 
