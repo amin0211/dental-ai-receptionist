@@ -109,7 +109,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 "type": "audio/pcmu",
                             },
                             "transcription": {
-                                "model": "gpt-4o-mini-transcribe",
+                                "model": "gpt-4o-transcribe",#"gpt-4o-mini-transcribe",
                             },
                             "turn_detection": {
                                 "type": "server_vad",
@@ -208,9 +208,14 @@ async def twilio_realtime(websocket: WebSocket):
                                         "summary": "Realtime AI call completed.",
                                     },
                                 )
+                                caller_only_transcript = "\n".join(
+                                    line for line in transcript_parts
+                                    if line.startswith("Caller:")
+                                )
+
                                 service_match = match_service_from_transcript(
                                     current_clinic_id,
-                                    full_transcript,
+                                    caller_only_transcript,
                                 )
 
                                 appointment_details = extract_appointment_details_from_transcript(
