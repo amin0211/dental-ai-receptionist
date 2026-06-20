@@ -20,6 +20,7 @@ from supabase_service import (
     update_appointment_request,
     update_call,
     match_service_from_transcript,
+    save_call_extraction,
 )
 
 app = FastAPI()
@@ -220,6 +221,22 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 appointment_details = extract_appointment_details_from_transcript(
                                     full_transcript
+                                )
+                                
+                                save_call_extraction(
+                                    clinic_id=current_clinic_id,
+                                    call_id=current_call_id,
+                                    raw_transcript=full_transcript,
+                                    cleaned_transcript=None,
+                                    detected_language=None,
+                                    patient_name=appointment_details["patient_name"],
+                                    service_category=service_match["category_name"] if service_match else None,
+                                    canonical_reason=service_match["canonical_reason"] if service_match else None,
+                                    preferred_time_raw=appointment_details["preferred_time"],
+                                    preferred_datetime=None,
+                                    urgency=service_match["default_urgency"] if service_match else "normal",
+                                    confidence=None,
+                                    extraction_notes="Initial extraction using DB keyword match and transcript context.",
                                 )
 
                                 if service_match and service_match["creates_appointment_request"]:

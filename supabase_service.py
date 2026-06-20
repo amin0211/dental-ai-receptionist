@@ -219,7 +219,57 @@ def update_call(call_id: str, updates: dict):
         print(f"Error updating call: {e}")
         return None
     
+def save_call_extraction(
+    clinic_id: str | None,
+    call_id: str | None,
+    raw_transcript: str | None = None,
+    cleaned_transcript: str | None = None,
+    detected_language: str | None = None,
+    patient_name: str | None = None,
+    service_category: str | None = None,
+    canonical_reason: str | None = None,
+    preferred_time_raw: str | None = None,
+    preferred_datetime: str | None = None,
+    urgency: str | None = "normal",
+    confidence: float | None = None,
+    extraction_notes: str | None = None,
+):
+    if not supabase:
+        print("Supabase client is not initialized")
+        return None
 
+    try:
+        payload = {
+            "clinic_id": clinic_id,
+            "call_id": call_id,
+            "raw_transcript": raw_transcript,
+            "cleaned_transcript": cleaned_transcript,
+            "detected_language": detected_language,
+            "patient_name": patient_name,
+            "service_category": service_category,
+            "canonical_reason": canonical_reason,
+            "preferred_time_raw": preferred_time_raw,
+            "preferred_datetime": preferred_datetime,
+            "urgency": urgency or "normal",
+            "confidence": confidence,
+            "extraction_notes": extraction_notes,
+        }
+
+        print(f"Inserting call extraction payload: {payload}")
+
+        result = supabase.table("call_extractions").insert(payload).execute()
+
+        print(f"Call extraction insert result: {result.data}")
+
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error saving call extraction: {e}")
+        return None
+    
 def match_service_from_transcript(clinic_id: str | None, transcript: str):
     if not supabase or not clinic_id:
         print("Cannot match service: missing supabase or clinic_id")
