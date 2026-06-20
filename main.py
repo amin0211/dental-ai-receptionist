@@ -73,50 +73,43 @@ async def twilio_realtime(websocket: WebSocket):
                     "type": "realtime",
                     "model": OPENAI_REALTIME_MODEL,
                     "instructions": (
-                        "You are a friendly, concise AI receptionist for Westview Dental in Vancouver, BC. "
-                        "Detect the caller's language and respond in the same language. "
-                        "If the caller speaks Persian/Farsi, respond naturally in Persian/Farsi. "
-                        "If the caller speaks English, respond naturally in English. "
+                        "You are a concise AI receptionist for Westview Dental in Vancouver, BC. "
+                        "Respond in the caller's language: Persian/Farsi if they speak Persian, English if they speak English. "
+                        "Keep every reply short and ask exactly one question at a time. "
 
-                        "Help callers with appointment requests, clinic hours, location questions, and urgent dental concerns. "
-                        "Keep responses short. Ask only one question at a time. "
+                        "For appointment requests, collect exactly these fields in order: "
+                        "1 patient_name, 2 reason, 3 preferred_date_raw, 4 preferred_time_raw. "
+                        "Do not skip ahead. Do not ask for date and time together. "
 
-                        "For appointment requests, collect details in this order: "
-                        "full name, reason for visit, preferred date, preferred time. "
+                        "Field rules: "
+                        "Ask for full name first. Repeat it back and ask if correct. Save only after confirmation. "
+                        "Then ask the reason for visit. Save only what the caller says; do not infer or reword. "
+                        "Then ask preferred date. Repeat it back and ask if correct. Save only after confirmation. "
+                        "Then ask preferred time. Repeat it back and ask if correct. Save only after confirmation. "
 
-                        "Because phone transcription can be imperfect, never guess, invent, or autocorrect the caller's name, reason, date, or time. "
-                        "If the caller's answer is unclear, noisy, mixed-language, or does not sound like a valid answer, ask them to repeat slowly. "
+                        "Never guess, invent, autocorrect, or translate unclear speech into a likely answer. "
+                        "If the caller's answer is unclear, noisy, mixed-language, or unrelated, ask them to repeat slowly. "
+                        "If a field is unclear or unconfirmed, set that field to null, explain it in notes, and use confidence below 0.6. "
+                        "Use confidence above 0.85 only when the saved details were clearly confirmed. "
 
-                        "For full name: ask for the caller's full name, repeat the name back, and ask if it is correct. "
-                        "Save the name only if the caller confirms it. "
+                        "Use save_appointment_draft whenever a field is confirmed or clearly provided. "
+                        "After all four fields are collected, say the request has been noted and the front desk will contact them to confirm. "
+                        "Never say the appointment is confirmed. Do not mention tools, databases, or internal systems. "
 
-                        "For reason: ask for the reason separately. Use only what the caller says. Do not infer the reason from your own wording. "
-
-                        "For date and time: never ask for both together. "
-                        "Ask for the preferred date first, repeat it back, and ask if it is correct. "
-                        "Only after the date is confirmed, ask for the preferred time, repeat it back, and ask if it is correct. "
-
-                        "Use the save_appointment_draft tool only for details that were clearly provided and confirmed. "
-                        "If any important field is unclear or unconfirmed, set that field to null, explain the uncertainty in notes, and use confidence below 0.6. "
-                        "Use confidence above 0.85 only when the caller clearly confirmed the saved details. "
-
-                        "Do not claim the appointment is confirmed. "
-                        "Say only that the request has been noted and the front desk will contact them to confirm. "
-
-                        "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately. "
-                        "Do not mention tools, databases, or internal systems."
+                        "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
                     ),
-
                     "output_modalities": ["audio"],
                     "tools": [
                         {
                             "type": "function",
                             "name": "save_appointment_draft",
                             "description": (
-                                "Save structured appointment details only after the caller clearly confirms them. "
+                                "Save the current appointment draft field-by-field. "
+                                "Only save values that were clearly provided and, for name/date/time, confirmed by the caller. "
                                 "Never guess or autocorrect unclear speech. "
                                 "If a field is unclear or unconfirmed, set it to null, explain the uncertainty in notes, and lower confidence."
                             ),
+
                             "parameters": {
                                 "type": "object",
                                 "properties": {
@@ -335,7 +328,7 @@ async def twilio_realtime(websocket: WebSocket):
 
 
                                 if should_create_request:
-                                    create_appointment_request(
+                                    appointment_request = create_appointment_request(
                                         clinic_id=current_clinic_id,
                                         call_id=current_call_id,
                                         patient_phone=current_caller_phone,
@@ -355,6 +348,17 @@ async def twilio_realtime(websocket: WebSocket):
                                         urgency=service_match["default_urgency"] if service_match else "normal",
                                         status="new",
                                     )
+
+                                    if appointment_request:
+                                        update_appointment_request(
+                                            appointment_request["id"],
+                                            {
+                                                "preferred_date_raw": appointment_draft.get("preferred_date_raw"),
+                                                "preferred_time_raw": appointment_draft.get("preferred_time_raw"),
+                                                "preferred_date_confirmed": appointment_draft.get("date_confirmed"),
+                                                "preferred_time_confirmed": appointment_draft.get("time_confirmed"),
+                                            },
+                                        )
 
                                     print(
                                         "Realtime appointment request created from structured draft: "
