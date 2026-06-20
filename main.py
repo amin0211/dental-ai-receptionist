@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from supabase import create_client, Client
+from openai import AsyncOpenAI
 
 from fastapi import WebSocket, WebSocketDisconnect
 import json
@@ -28,6 +29,8 @@ app = FastAPI()
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
+
+
 supabase: Client | None = None
 
 if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
@@ -35,7 +38,7 @@ if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
-
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 @app.websocket("/twilio/realtime")
 async def twilio_realtime(websocket: WebSocket):
@@ -82,8 +85,11 @@ async def twilio_realtime(websocket: WebSocket):
                         "Do not switch languages because of one random foreign-looking transcript fragment. "
                         "Keep every reply short. Ask exactly one question at a time. "
 
+                        # "For appointment booking, collect fields in this exact order: "
+                        # "patient_name, reason, preferred_date_raw, preferred_time_raw. "
                         "For appointment booking, collect fields in this exact order: "
-                        "patient_name, reason, preferred_date_raw, preferred_time_raw. "
+                        "reason, preferred_date_raw, preferred_time_raw. "
+
                         "Do not skip steps. Never ask for more than one field in the same reply. "
                         "Never ask for date and time together. "
 
@@ -101,12 +107,12 @@ async def twilio_realtime(websocket: WebSocket):
                         "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
                         "Only clear yes/no answers in the caller's language count as confirmation. "
 
-                        "For patient_name, ask for the full name. "
-                        "If the caller gives a clear name, repeat only the understood name and ask if it is correct. "
-                        "If the caller clearly confirms the repeated name, move to reason. "
-                        "If the caller gives a clear correction, use the corrected name and move to reason. "
-                        "If the caller says no without a clear correction, ask for the full name again. "
-                        "If the name remains unclear after two attempts, continue to reason and let the front desk confirm the name later. "
+                        # "For patient_name, ask for the full name. "
+                        # "If the caller gives a clear name, repeat only the understood name and ask if it is correct. "
+                        # "If the caller clearly confirms the repeated name, move to reason. "
+                        # "If the caller gives a clear correction, use the corrected name and move to reason. "
+                        # "If the caller says no without a clear correction, ask for the full name again. "
+                        # "If the name remains unclear after two attempts, continue to reason and let the front desk confirm the name later. "
 
                         "For reason, ask only why they want the dental visit. "
                         "If the reason is understandable, accept it and move to preferred_date_raw. "
@@ -128,7 +134,8 @@ async def twilio_realtime(websocket: WebSocket):
                         "If the caller says no without a clear correction, discard the old time and ask for the preferred time again. "
                         "If the time remains unclear after two attempts, finish politely and say the front desk will contact them to confirm the missing details. "
 
-                        "Never say the request has been noted unless at least patient_name, reason, preferred_date_raw, and preferred_time_raw have been attempted. "
+                        # "Never say the request has been noted unless at least patient_name, reason, preferred_date_raw, and preferred_time_raw have been attempted. "
+                        "Never say the request has been noted unless reason, preferred_date_raw, and preferred_time_raw have been attempted. "
                         "If some details are unclear after repeated attempts, say the front desk will contact them to confirm the missing details. "
                         "After all required fields have been attempted, say the request has been noted and the front desk will contact them to confirm. "
                         "Never say the appointment is confirmed. "
@@ -236,6 +243,7 @@ async def twilio_realtime(websocket: WebSocket):
                             if current_call_id and transcript_parts:
                                 full_transcript = "\n".join(transcript_parts)
 
+                                # 1) Save the raw full transcript on the call record
                                 update_call(
                                     current_call_id,
                                     {
@@ -243,15 +251,26 @@ async def twilio_realtime(websocket: WebSocket):
                                         "summary": "Realtime AI call completed.",
                                     },
                                 )
+
+                                # 2) Build caller-only transcript for service matching
                                 caller_only_transcript = "\n".join(
                                     line for line in transcript_parts
                                     if line.startswith("Caller:")
                                 )
 
-                                appointment_details = extract_appointment_details_from_transcript(full_transcript)
+                                # 3) After-call AI extraction
+                                # This is NOT realtime tool calling.
+                                # It runs only after the phone call has ended.
+                                appointment_details = await extract_appointment_details_with_openai(
+                                    full_transcript
+                                )
 
-                                print(f"Final extracted appointment details: {appointment_details}")
+                                print(
+                                    "Final appointment details extracted after call: "
+                                    f"{appointment_details}"
+                                )
 
+                                # 4) Match service using caller text + extracted reason
                                 service_match_input = caller_only_transcript
 
                                 if appointment_details.get("reason"):
@@ -262,17 +281,27 @@ async def twilio_realtime(websocket: WebSocket):
                                     service_match_input,
                                 )
 
+                                # 5) Normalize extracted fields
                                 patient_name = appointment_details.get("patient_name")
+
                                 reason = (
                                     service_match["canonical_reason"]
                                     if service_match
                                     else appointment_details.get("reason")
                                 )
+
                                 preferred_date_raw = appointment_details.get("preferred_date_raw")
                                 preferred_time_raw = appointment_details.get("preferred_time_raw")
+
                                 date_confirmed = appointment_details.get("date_confirmed")
                                 time_confirmed = appointment_details.get("time_confirmed")
 
+                                preferred_time_combined = (
+                                    ((preferred_date_raw or "") + " " + (preferred_time_raw or "")).strip()
+                                    or None
+                                )
+
+                                # 6) Save structured extraction
                                 save_call_extraction(
                                     clinic_id=current_clinic_id,
                                     call_id=current_call_id,
@@ -280,26 +309,38 @@ async def twilio_realtime(websocket: WebSocket):
                                     cleaned_transcript=appointment_details.get("notes"),
                                     detected_language=appointment_details.get("language"),
                                     patient_name=patient_name,
-                                    service_category=service_match["category_name"] if service_match else None,
+                                    service_category=(
+                                        service_match["category_name"]
+                                        if service_match
+                                        else None
+                                    ),
                                     canonical_reason=reason,
                                     preferred_time_raw=preferred_time_raw,
                                     preferred_datetime=None,
-                                    urgency=service_match["default_urgency"] if service_match else "normal",
+                                    urgency=(
+                                        service_match["default_urgency"]
+                                        if service_match
+                                        else "normal"
+                                    ),
                                     confidence=appointment_details.get("confidence"),
-                                    extraction_notes=json.dumps(appointment_details, ensure_ascii=False),
+                                    extraction_notes=json.dumps(
+                                        appointment_details,
+                                        ensure_ascii=False,
+                                    ),
                                     preferred_date_raw=preferred_date_raw,
                                     preferred_date_confirmed=date_confirmed,
                                     preferred_time_confirmed=time_confirmed,
                                 )
 
-                                should_create_request = bool(reason or patient_name or preferred_date_raw or preferred_time_raw)
+                                # 7) Create appointment request if at least one useful field exists
+                                should_create_request = bool(
+                                    patient_name
+                                    or reason
+                                    or preferred_date_raw
+                                    or preferred_time_raw
+                                )
 
                                 if should_create_request:
-                                    preferred_time_combined = (
-                                        ((preferred_date_raw or "") + " " + (preferred_time_raw or "")).strip()
-                                        or None
-                                    )
-
                                     appointment_request = create_appointment_request(
                                         clinic_id=current_clinic_id,
                                         call_id=current_call_id,
@@ -307,7 +348,11 @@ async def twilio_realtime(websocket: WebSocket):
                                         patient_name=patient_name,
                                         reason=reason,
                                         preferred_time=preferred_time_combined,
-                                        urgency=service_match["default_urgency"] if service_match else "normal",
+                                        urgency=(
+                                            service_match["default_urgency"]
+                                            if service_match
+                                            else "normal"
+                                        ),
                                         status="new",
                                     )
 
@@ -323,102 +368,21 @@ async def twilio_realtime(websocket: WebSocket):
                                         )
 
                                     print(
-                                        "Realtime appointment request created from transcript extraction: "
+                                        "Realtime appointment request created after-call AI extraction: "
                                         f"service={service_match}, details={appointment_details}"
                                     )
+
                                 else:
-                                    print(f"No appointment request created. service_match={service_match}, details={appointment_details}")
-
-                                service_match_input = caller_only_transcript
-
-
-
-                                service_match = match_service_from_transcript(
-                                    current_clinic_id,
-                                    service_match_input,
-                                )
-
-                                appointment_details = extract_appointment_details_from_transcript(
-                                    full_transcript
-                                )
-                                
-                                print(f"Final appointment draft: {appointment_draft}")
-                                
-                                save_call_extraction(
-                                    clinic_id=current_clinic_id,
-                                    call_id=current_call_id,
-                                    raw_transcript=full_transcript,
-                                    cleaned_transcript=appointment_draft.get("notes"),
-                                    detected_language=appointment_draft.get("language"),
-                                    patient_name=appointment_draft.get("patient_name") or appointment_details["patient_name"],
-                                    service_category=service_match["category_name"] if service_match else None,
-                                    canonical_reason=(
-                                        service_match["canonical_reason"]
-                                        if service_match
-                                        else appointment_draft.get("reason")
-                                    ),
-                                    preferred_time_raw=(
-                                        appointment_draft.get("preferred_time_raw")
-                                        or appointment_details["preferred_time"]
-                                    ),
-                                    preferred_datetime=None,
-                                    urgency=service_match["default_urgency"] if service_match else "normal",
-                                    confidence=appointment_draft.get("confidence"),
-                                    extraction_notes=json.dumps(appointment_draft, ensure_ascii=False),
-                                    preferred_date_raw=appointment_draft.get("preferred_date_raw"),
-                                    preferred_date_confirmed=appointment_draft.get("date_confirmed"),
-                                    preferred_time_confirmed=appointment_draft.get("time_confirmed"),
-                                )
-
-
-                                should_create_request = (
-                                    (service_match and service_match["creates_appointment_request"])
-                                    or bool(appointment_draft.get("reason"))
-                                )
-
-
-
-                                if should_create_request:
-                                    appointment_request = create_appointment_request(
-                                        clinic_id=current_clinic_id,
-                                        call_id=current_call_id,
-                                        patient_phone=current_caller_phone,
-                                        patient_name=appointment_draft.get("patient_name") or appointment_details["patient_name"],
-                                        reason=(
-                                            service_match["canonical_reason"]
-                                            if service_match
-                                            else appointment_draft.get("reason")
-                                        ),
-                                        preferred_time=(
-                                            (
-                                                (appointment_draft.get("preferred_date_raw") or "") + " " +
-                                                (appointment_draft.get("preferred_time_raw") or "")
-                                            ).strip()
-                                            or appointment_details["preferred_time"]
-                                        ),
-                                        urgency=service_match["default_urgency"] if service_match else "normal",
-                                        status="new",
-                                    )
-
-                                    if appointment_request:
-                                        update_appointment_request(
-                                            appointment_request["id"],
-                                            {
-                                                "preferred_date_raw": appointment_draft.get("preferred_date_raw"),
-                                                "preferred_time_raw": appointment_draft.get("preferred_time_raw"),
-                                                "preferred_date_confirmed": appointment_draft.get("date_confirmed"),
-                                                "preferred_time_confirmed": appointment_draft.get("time_confirmed"),
-                                            },
-                                        )
-
                                     print(
-                                        "Realtime appointment request created from structured draft: "
-                                        f"service={service_match}, details={appointment_details}, draft={appointment_draft}"
+                                        "No appointment request created after-call AI extraction. "
+                                        f"service_match={service_match}, details={appointment_details}"
                                     )
-                                else:
-                                    print(f"No appointment request created. service_match={service_match}")
 
-                                    
+                            else:
+                                print(
+                                    "Twilio stop received, but no current_call_id or transcript_parts found."
+                                )
+
                             await openai_ws.close()
                             break
 
@@ -444,7 +408,6 @@ async def twilio_realtime(websocket: WebSocket):
                             print(f"OpenAI event: {event_type}")
 
                         elif event_type == "response.created":
-                            response_active = True
                             print("OpenAI event: response.created")
 
                         elif event_type in ["response.audio.delta", "response.output_audio.delta"]:
@@ -496,11 +459,9 @@ async def twilio_realtime(websocket: WebSocket):
 
 
                         elif event_type == "response.done":
-                            response_active = False
                             print("OpenAI event: response.done")
 
                         elif event_type == "error":
-                            response_active = False
                             print(f"OpenAI error: {response}")
 
                         else:
@@ -857,246 +818,131 @@ async def collect_time(request: Request):
     return Response(content=twiml, media_type="application/xml")
 
 
-def extract_appointment_details_from_transcript(transcript: str) -> dict:
-    patient_name = None
-    reason = None
-    preferred_date_raw = None
-    preferred_time_raw = None
-    date_confirmed = False
-    time_confirmed = False
-    language = None
-    confidence = 0.5
-    notes = []
 
-    lines = [line.strip() for line in transcript.splitlines() if line.strip()]
+async def extract_appointment_details_with_openai(transcript: str) -> dict:
+    if not openai_client:
+        return {
+            "patient_name": None,
+            "reason": None,
+            "preferred_date_raw": None,
+            "preferred_time_raw": None,
+            "name_confirmed": False,
+            "date_confirmed": False,
+            "time_confirmed": False,
+            "reason_confirmed": False,
+            "language": "unknown",
+            "confidence": 0.0,
+            "notes": "OpenAI client is not initialized.",
+        }
 
-    last_ai_question = None
-    pending_confirmation_type = None
-    pending_confirmation_value = None
-
-    yes_words = {
-        "yes", "yeah", "yep", "correct", "right", "ok", "okay",
-        "بله", "آره", "اره", "درسته", "صحیح", "تایید", "تأیید",
-        "vale", "vvale", "alé", "ale"
+    schema = {
+        "type": "object",
+        "properties": {
+            "patient_name": {
+                "type": ["string", "null"],
+                "description": "Patient full name only if clearly provided or clearly confirmed."
+            },
+            "reason": {
+                "type": ["string", "null"],
+                "description": "Dental visit reason only if clearly provided or understandable."
+            },
+            "preferred_date_raw": {
+                "type": ["string", "null"],
+                "description": "Preferred appointment date only if clearly provided or confirmed."
+            },
+            "preferred_time_raw": {
+                "type": ["string", "null"],
+                "description": "Preferred appointment time only if clearly provided or confirmed."
+            },
+            "name_confirmed": {
+                "type": "boolean",
+                "description": "True only if the assistant repeated the name and the caller clearly confirmed it."
+            },
+            "date_confirmed": {
+                "type": "boolean",
+                "description": "True only if the assistant repeated the date and the caller clearly confirmed it."
+            },
+            "time_confirmed": {
+                "type": "boolean",
+                "description": "True only if the assistant repeated the time and the caller clearly confirmed it."
+            },
+            "reason_confirmed": {
+                "type": "boolean",
+                "description": "True if the reason was clearly stated. Explicit yes/no confirmation is not required for reason."
+            },
+            "language": {
+                "type": ["string", "null"],
+                "description": "Main caller language, such as fa, en, es, or unknown."
+            },
+            "confidence": {
+                "type": "number",
+                "description": "Extraction confidence from 0 to 1."
+            },
+            "notes": {
+                "type": ["string", "null"],
+                "description": "Short explanation of missing, rejected, unclear, or uncertain values."
+            },
+        },
+        "required": [
+            "patient_name",
+            "reason",
+            "preferred_date_raw",
+            "preferred_time_raw",
+            "name_confirmed",
+            "date_confirmed",
+            "time_confirmed",
+            "reason_confirmed",
+            "language",
+            "confidence",
+            "notes",
+        ],
+        "additionalProperties": False,
     }
 
-    no_words = {
-        "no", "nope", "nah", "wrong", "incorrect",
-        "نه", "نخیر", "نه خیر", "غلطه", "اشتباهه",
-        "na", "no es"
-    }
-
-    def normalize_text(text: str) -> str:
-        return (
-            text.strip()
-            .lower()
-            .replace("؟", "")
-            .replace("?", "")
-            .replace(".", "")
-            .replace(",", "")
-            .replace("«", "")
-            .replace("»", "")
-            .replace('"', "")
-            .replace("'", "")
-        )
-
-    def is_yes(text: str) -> bool:
-        t = normalize_text(text)
-        return any(word in t.split() or word == t for word in yes_words)
-
-    def is_no(text: str) -> bool:
-        t = normalize_text(text)
-        return any(word in t for word in no_words)
-
-    def looks_garbled(text: str) -> bool:
-        t = normalize_text(text)
-
-        if len(t) <= 1:
-            return True
-
-        # Mostly random Latin fragments from bad transcription
-        latin_chars = sum(1 for ch in t if "a" <= ch <= "z")
-        total_letters = sum(1 for ch in t if ch.isalpha())
-
-        if total_letters >= 3 and latin_chars / max(total_letters, 1) > 0.7:
-            common_clear_words = [
-                "may", "june", "july", "april", "march", "monday", "tuesday",
-                "wednesday", "thursday", "friday", "morning", "afternoon",
-                "cleaning", "checkup", "pain", "filling"
-            ]
-            if not any(word in t for word in common_clear_words):
-                return True
-
-        return False
-
-    def extract_quoted_value(ai_text: str) -> str | None:
-        if "«" in ai_text and "»" in ai_text:
-            start = ai_text.find("«") + 1
-            end = ai_text.find("»", start)
-            if end > start:
-                return ai_text[start:end].strip()
-
-        if '"' in ai_text:
-            parts = ai_text.split('"')
-            if len(parts) >= 3:
-                return parts[1].strip()
-
-        return None
-
-    for i, line in enumerate(lines):
-        if line.startswith("AI:"):
-            ai_text = line.replace("AI:", "", 1).strip()
-            ai_lower = ai_text.lower()
-            last_ai_question = ai_text
-
-            quoted_value = extract_quoted_value(ai_text)
-
-            # Detect confirmation questions
-            if quoted_value:
-                if (
-                    "name" in ai_lower
-                    or "full name" in ai_lower
-                    or "correct" in ai_lower
-                    or "نام" in ai_text
-                    or "اسم" in ai_text
-                    or "صحیح" in ai_text
-                    or "درست" in ai_text
-                ):
-                    # This could be name/date/time; infer from content and previous flow
-                    if any(month in ai_lower for month in ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]):
-                        pending_confirmation_type = "date"
-                    elif any(token in ai_lower for token in ["am", "pm", "morning", "afternoon", "evening", "o'clock", "ساعت", "صبح", "ظهر", "بعدازظهر", "عصر"]):
-                        pending_confirmation_type = "time"
-                    elif preferred_date_raw is None and ("date" in ai_lower or "تاریخ" in ai_text):
-                        pending_confirmation_type = "date"
-                    elif preferred_time_raw is None and ("time" in ai_lower or "ساعت" in ai_text):
-                        pending_confirmation_type = "time"
-                    elif patient_name is None:
-                        pending_confirmation_type = "name"
-                    else:
-                        pending_confirmation_type = "unknown"
-
-                    pending_confirmation_value = quoted_value
-
-            continue
-
-        if not line.startswith("Caller:"):
-            continue
-
-        caller_text = line.replace("Caller:", "", 1).strip()
-        caller_lower = caller_text.lower()
-
-        if not caller_text:
-            continue
-
-        if language is None:
-            if any("\u0600" <= ch <= "\u06FF" for ch in caller_text):
-                language = "fa"
-            else:
-                language = "unknown"
-
-        # Handle yes/no confirmation
-        if pending_confirmation_type and pending_confirmation_value:
-            if is_yes(caller_text):
-                if pending_confirmation_type == "name":
-                    patient_name = pending_confirmation_value
-                elif pending_confirmation_type == "date":
-                    preferred_date_raw = pending_confirmation_value
-                    date_confirmed = True
-                elif pending_confirmation_type == "time":
-                    preferred_time_raw = pending_confirmation_value
-                    time_confirmed = True
-
-                pending_confirmation_type = None
-                pending_confirmation_value = None
-                continue
-
-            if is_no(caller_text):
-                notes.append(
-                    f"Caller rejected {pending_confirmation_type}: {pending_confirmation_value}"
-                )
-                pending_confirmation_type = None
-                pending_confirmation_value = None
-                continue
-
-        previous_ai = last_ai_question or ""
-        previous_ai_lower = previous_ai.lower()
-
-        if looks_garbled(caller_text):
-            notes.append(f"Possible garbled caller text: {caller_text}")
-            continue
-
-        # Name candidate
-        if patient_name is None and (
-            "full name" in previous_ai_lower
-            or "your name" in previous_ai_lower
-            or "name" in previous_ai_lower
-            or "نام" in previous_ai
-            or "اسم" in previous_ai
-        ):
-            if len(caller_text.split()) <= 6:
-                patient_name = caller_text
-            continue
-
-        # Reason candidate
-        if reason is None and (
-            "reason" in previous_ai_lower
-            or "visit" in previous_ai_lower
-            or "dental" in previous_ai_lower
-            or "مراجعه" in previous_ai
-            or "دلیل" in previous_ai
-            or "چرا" in previous_ai
-        ):
-            reason = caller_text
-            continue
-
-        # Date candidate
-        if preferred_date_raw is None and (
-            "date" in previous_ai_lower
-            or "day" in previous_ai_lower
-            or "when" in previous_ai_lower
-            or "تاریخ" in previous_ai
-            or "چه روز" in previous_ai
-            or "چه زمانی" in previous_ai
-        ):
-            preferred_date_raw = caller_text
-            continue
-
-        # Time candidate
-        if preferred_time_raw is None and (
-            "time" in previous_ai_lower
-            or "hour" in previous_ai_lower
-            or "ساعت" in previous_ai
-        ):
-            preferred_time_raw = caller_text
-            continue
-
-    filled_count = sum(
-        1 for value in [patient_name, reason, preferred_date_raw, preferred_time_raw]
-        if value
+    response = await openai_client.responses.create(
+        model=os.environ.get("OPENAI_EXTRACTION_MODEL", "gpt-4.1-mini"),
+        input=[
+            {
+                "role": "system",
+                "content": (
+                    "Extract structured appointment details from this phone call transcript. "
+                    "Use only information supported by the transcript. "
+                    "Do not guess or invent names, dates, times, or reasons. "
+                    "If the assistant repeated a value and the caller clearly agreed, mark that field as confirmed. "
+                    "If the caller rejected a value, do not save the rejected value. "
+                    "If the caller corrected a value and then confirmed it, save the corrected value. "
+                    "If a value is unclear, garbled, mixed-language, or uncertain, set it to null and explain in notes. "
+                    "For reason, explicit yes/no confirmation is not required if the caller's reason was understandable."
+                ),
+            },
+            {
+                "role": "user",
+                "content": transcript,
+            },
+        ],
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "appointment_extraction",
+                "schema": schema,
+                "strict": True,
+            }
+        },
     )
 
-    confidence = 0.35 + (filled_count * 0.12)
-
-    if date_confirmed:
-        confidence += 0.08
-
-    if time_confirmed:
-        confidence += 0.08
-
-    confidence = min(confidence, 0.9)
-
-    if notes:
-        confidence = min(confidence, 0.65)
-
-    return {
-        "patient_name": patient_name,
-        "reason": reason,
-        "preferred_date_raw": preferred_date_raw,
-        "preferred_time_raw": preferred_time_raw,
-        "date_confirmed": date_confirmed,
-        "time_confirmed": time_confirmed,
-        "language": language or "unknown",
-        "confidence": confidence,
-        "notes": "; ".join(notes) if notes else None,
-    }
+    try:
+        return json.loads(response.output_text)
+    except Exception as e:
+        return {
+            "patient_name": None,
+            "reason": None,
+            "preferred_date_raw": None,
+            "preferred_time_raw": None,
+            "name_confirmed": False,
+            "date_confirmed": False,
+            "time_confirmed": False,
+            "reason_confirmed": False,
+            "language": "unknown",
+            "confidence": 0.0,
+            "notes": f"Failed to parse extraction JSON: {e}",
+        }
