@@ -1203,7 +1203,7 @@ def get_booking_options_for_ai(
                 start_date=parsed_preferred_date,
                 days_ahead=0,
                 max_slots=2,
-                step_minutes=15,
+                step_minutes=duration_minutes,
             )
         else:
             doctor_slots = find_next_available_slots_for_doctor(
@@ -1214,7 +1214,7 @@ def get_booking_options_for_ai(
                 start_date=None,
                 days_ahead=60,
                 max_slots=2,
-                step_minutes=15,
+                step_minutes=duration_minutes,
             )
 
         all_slots.extend(
