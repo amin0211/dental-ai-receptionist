@@ -1,19 +1,15 @@
 import os
 from urllib.parse import urlparse
+import json
+import asyncio
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from supabase import create_client, Client
 from openai import AsyncOpenAI
-
-from fastapi import WebSocket, WebSocketDisconnect
-import json
-
-import asyncio
 import websockets
 
 from supabase_service import (
-    supabase,
     normalize_phone,
     find_clinic_by_twilio_number,
     save_call_to_db,
@@ -24,14 +20,13 @@ from supabase_service import (
     save_call_extraction,
     get_active_doctors_for_clinic,
     match_doctor_from_name,
+    get_booking_options_for_ai,
 )
 
 app = FastAPI()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-
-
 
 supabase: Client | None = None
 
@@ -41,6 +36,7 @@ if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
 
 @app.websocket("/twilio/realtime")
 async def twilio_realtime(websocket: WebSocket):
@@ -56,9 +52,11 @@ async def twilio_realtime(websocket: WebSocket):
     current_call_id = None
     transcript_parts = []
     ai_transcript_buffer = ""
+
     current_clinic_id = None
     current_caller_phone = None
     current_doctors = []
+
     realtime_session_ready = False
 
     openai_url = f"wss://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
@@ -72,79 +70,91 @@ async def twilio_realtime(websocket: WebSocket):
             },
         ) as openai_ws:
             print("Connected to OpenAI Realtime")
-            
+
             BASE_REALTIME_INSTRUCTIONS = (
-                    "You are a concise AI receptionist for Westview Dental in Vancouver, BC. "
-                    "Start in neutral English unless the caller clearly speaks another language first. "
-                    "Reply in the caller's clearly detected language. "
-                    "If the caller clearly speaks Persian/Farsi at any point, switch to Persian/Farsi and continue in Persian/Farsi. "
-                    "If the caller clearly asks to use another language, switch to that language. "
-                    "If the caller's speech is mixed, garbled, or unclear, do not switch languages based on that unclear fragment. "
-                    "When speech is unclear, stay in the last clearly established language and ask the caller to repeat clearly. "
-                    "Do not switch languages because of one random foreign-looking transcript fragment. "
-                    "Keep every reply short. Ask exactly one question at a time. "
+                "You are a concise AI receptionist for Westview Dental in Vancouver, BC. "
 
-                    "For appointment booking, follow the clinic context collection order exactly. "
-                    "If the clinic context says there are multiple doctors, preferred_doctor_name is required before reason. "
-                    "If the clinic context says there are zero or one active doctor, do not ask for preferred_doctor_name. "
-                    "Do not ask for the patient's name. "
+                "Start in neutral English unless the caller clearly speaks another language first. "
+                "Reply in the caller's clearly detected language. "
+                "If the caller clearly speaks Persian/Farsi at any point, switch to Persian/Farsi and continue in Persian/Farsi. "
+                "If the caller clearly asks to use another language, switch to that language. "
+                "If the caller's speech is mixed, garbled, or unclear, do not switch languages based on that unclear fragment. "
+                "When speech is unclear, stay in the last clearly established language and ask the caller to repeat clearly. "
+                "Do not switch languages because of one random foreign-looking transcript fragment. "
 
-                    "Do not skip steps. Never ask for more than one field in the same reply. "
-                    "Never ask for date and time together. "
+                "Keep every reply short. Ask exactly one question at a time. "
+                "Every non-final assistant reply must contain exactly one sentence, and that sentence must be a direct question. "
+                "Never ask for more than one field in the same reply. "
+                "Do not ask for the patient's name. "
 
-                    "Every non-final assistant reply must contain exactly one sentence, and that sentence must be a direct question. "
-                    "The final reply may be one short statement, but only after the required appointment details are collected. "
-                    "Never say any acknowledgement, filler, transition, or status sentence before asking the question. "
-                    "Do not use filler, acknowledgement, transition, or status phrases in any language. "
-                    "Do not tell the caller that you are checking, reviewing, saving, registering, storing, confirming internally, or moving to the next step. "
-                    "Do not say anything equivalent to: okay, alright, one moment, please wait, let me check, I will check, let me save that, I will save that, next step, I will ask the next question now. "
+                "Never say any acknowledgement, filler, transition, or status sentence before asking the question. "
+                "Do not use filler, acknowledgement, transition, or status phrases in any language. "
+                "Do not say anything equivalent to: okay, alright, one moment, please wait, let me check, I will check, let me save that, I will save that, next step, I will ask the next question now. "
 
-                    "If the caller's answer is garbled, mixed-language, unrelated, or low-confidence, do not convert it into a name, date, time, or reason. "
-                    "Ask the same field again in the last clearly established language. "
-                    "Never turn unclear audio into a likely name, date, time, or reason. "
-                    "Never turn unclear audio into a likely date such as next Tuesday, next Monday, April 22, April 15, or a likely time such as 3 PM or 9:30 AM. "
-                    "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
-                    "Only clear yes/no answers in the caller's language count as confirmation. "
+                "For appointment booking, do not force the caller to choose a doctor first. "
+                "If the caller already mentions a doctor, remember that doctor preference. "
+                "If the caller does not mention a doctor, ask the reason for the dental visit first. "
+                "For reason, ask only why they want the dental visit. "
+                "If the reason is understandable, accept it. "
+                "Do not ask for confirmation of the reason unless it is unclear. "
+                "If the reason is unclear, ask why they want the dental visit again. "
 
-                    "For reason, ask only why they want the dental visit. "
-                    "If the reason is understandable, accept it and move to preferred_date_raw. "
-                    "Do not ask for confirmation of the reason unless it is unclear. "
-                    "If the reason is unclear, ask why they want the dental visit again. "
-                    "If the reason remains unclear after two attempts, continue to preferred_date_raw and let the front desk clarify the reason later. "
+                "After the dental reason is clear, use the get_booking_options tool to find appointment options. "
+                "The booking tool uses the treatment duration, eligible doctors, recurring doctor availability, and calendar events from the clinic database. "
+                "If the caller already mentioned a doctor, include that doctor name in the tool call. "
+                "If the caller did not mention a doctor, pass doctor_name as null. "
 
-                    "For preferred_date_raw, ask only for the preferred date. "
-                    "After the caller gives a clear date, repeat only the understood date and ask if it is correct. "
-                    "The date is not collected until the caller clearly confirms it after you repeat it. "
-                    "If the caller says no, no matter the language, the date is rejected and not confirmed. "
-                    "If the caller says no and provides a corrected date, discard the old date, repeat only the corrected date, and ask if it is correct. "
-                    "If the caller says no without a clear correction, discard the old date and ask for the preferred date again. "
-                    "Do not move to preferred_time_raw until the preferred date has been clearly confirmed. "
+                "If the caller gives a preferred date, repeat only the understood date and ask if it is correct before using that date for slot search. "
+                "The date is not collected until the caller clearly confirms it after you repeat it. "
+                "If the caller says no, no matter the language, the date is rejected and not confirmed. "
+                "If the caller says no and provides a corrected date, discard the old date, repeat only the corrected date, and ask if it is correct. "
+                "If the caller says no without a clear correction, discard the old date and ask for the preferred date again. "
+                "If no preferred date is given, search for the earliest available slots. "
 
-                    "For preferred_time_raw, ask only for the preferred time. "
-                    "After the caller gives a clear time, repeat only the understood time and ask if it is correct. "
-                    "The time is not collected until the caller clearly confirms it after you repeat it. "
-                    "If the caller says no, no matter the language, the time is rejected and not confirmed. "
-                    "If the caller says no and provides a corrected time, discard the old time, repeat only the corrected time, and ask if it is correct. "
-                    "If the caller says no without a clear correction, discard the old time and ask for the preferred time again. "
-                    "Do not finish the call after a rejected time. "
-                    "Do not say the request has been noted until the preferred time has been clearly confirmed. "
+                "Do not ask for a preferred time before using the booking tool. "
+                "The preferred time should normally come from one of the suggested appointment slots. "
 
-                    "Never say the request has been noted unless all required fields for the current clinic context have been attempted. "
-                    "If the clinic has multiple doctors, preferred_doctor_name must also be attempted before the request can be noted. "
-                    "If some details are unclear after repeated attempts, say the front desk will contact them to confirm the missing details. "
+                "After the tool returns slot suggestions, offer exactly two suggestions when two are available. "
+                "Each suggestion must include doctor name, date, and time. "
+                "Ask which one works better. "
 
-                    "Do not say the request has been noted until preferred_date_raw and preferred_time_raw have both been clearly confirmed by the caller. "
-                    "If the clinic has multiple doctors, preferred_doctor_name must also be clearly answered before the request can be noted. "
-                    "Only after the doctor preference, confirmed date, and confirmed time are collected, say the request has been noted and the front desk will contact them to confirm. "
+                "After slot suggestions are given, classify the caller's next answer as one of: "
+                "select_suggested_slot, change_doctor, change_date, change_doctor_and_date, reject_without_alternative, ask_question, unclear. "
 
-                    "Never say the appointment is confirmed. "
+                "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
+                "Never say the appointment is confirmed. "
 
-                    "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
-                )
+                "If the caller says a different doctor after suggestions, call get_booking_options again with the updated doctor and the same reason and date if available. "
+                "If the caller says a different date after suggestions, confirm that date first, then call get_booking_options again with the updated date. "
+                "If the caller says both a different doctor and a different date, update both, confirm the date, then call get_booking_options again. "
 
+                "If the caller rejects the suggested slots without giving a new doctor or date, ask what date they prefer. "
+                "If the caller still does not choose a slot, say the front desk will contact them to find another time. "
+
+                "If the booking tool says the requested doctor does not provide the treatment, tell the caller that briefly and offer to check another eligible doctor. "
+                "If the booking tool says no slots were found, tell the caller the front desk will contact them to find another time. "
+                "If the booking tool says the service was not matched, ask the caller to briefly repeat the reason for the dental visit. "
+
+                "If the caller's answer is garbled, mixed-language, unrelated, or low-confidence, do not convert it into a name, date, time, doctor, reason, or slot choice. "
+                "Ask the same field again in the last clearly established language. "
+                "Never turn unclear audio into a likely date such as next Tuesday, next Monday, April 22, April 15, or a likely time such as 3 PM or 9:30 AM. "
+                "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
+                "Only clear yes/no answers in the caller's language count as confirmation. "
+
+                "Do not say the request has been noted until the caller has selected one of the suggested appointment slots, or until the caller agrees that the front desk should follow up. "
+
+                "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
+            )
 
             async def receive_from_twilio():
-                nonlocal stream_sid, current_call_id, current_clinic_id, current_caller_phone, transcript_parts, current_doctors, realtime_session_ready
+                nonlocal stream_sid
+                nonlocal current_call_id
+                nonlocal current_clinic_id
+                nonlocal current_caller_phone
+                nonlocal transcript_parts
+                nonlocal current_doctors
+                nonlocal realtime_session_ready
+
                 try:
                     while True:
                         message = await websocket.receive_text()
@@ -188,17 +198,18 @@ async def twilio_realtime(websocket: WebSocket):
                                 doctor_context = (
                                     " IMPORTANT CLINIC CONTEXT: "
                                     f"This clinic has multiple active doctors: {', '.join(doctor_names)}. "
-                                    "For appointment booking, preferred_doctor_name is required before reason. "
-                                    "Your first appointment-booking question MUST ask which doctor the caller prefers, or whether they have no preference. "
-                                    "Do not ask the reason until the caller has either chosen a doctor or said they have no preference. "
-                                    "Do not accept unclear, unrelated, random, or garbled answers as a doctor choice. "
-                                    "If the caller gives an unclear answer such as random words, mixed-language fragments, or unrelated sounds, ask the doctor question again. "
-                                    "If the caller mentions a doctor at any later point, treat it as preferred_doctor_name and update the doctor preference. "
-                                    "Do not treat a doctor name as the visit reason. "
-                                    "The appointment collection order is: preferred_doctor_name, reason, preferred_date_raw, preferred_time_raw. "
+                                    "Do not force the caller to choose a doctor first. "
+                                    "If the caller mentions a doctor at any point, treat it as preferred_doctor_name and use that doctor for booking search. "
+                                    "If the caller does not mention a doctor, ask the reason for the dental visit first. "
+                                    "After the reason is clear, call the get_booking_options tool. "
+                                    "If no doctor was requested, the tool will find eligible doctors for that treatment. "
+                                    "If a doctor was requested, the tool will check that doctor and treatment combination. "
+                                    "If the caller gives a preferred date, confirm the date before calling the tool with that date. "
+                                    "After slot suggestions are given, if the caller says a different doctor or different date, call the tool again with the updated preference. "
+                                    "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
+                                    "If the caller rejects the suggested slots without a new doctor or date, ask what date they prefer. "
+                                    "If the caller still does not choose a slot, say the front desk will contact them to find another time. "
                                     "Ask only one direct question at a time. "
-                                    "If the caller says they have no preference, accept it and continue to reason. "
-                                    "Do not force the caller to choose a doctor. "
                                     "Do not ask for the patient's name. "
                                 )
                             else:
@@ -206,7 +217,14 @@ async def twilio_realtime(websocket: WebSocket):
                                     " IMPORTANT CLINIC CONTEXT: "
                                     "This clinic has zero or one active doctor. "
                                     "Do not ask which doctor the caller prefers. "
-                                    "The appointment collection order is: reason, preferred_date_raw, preferred_time_raw. "
+                                    "Ask the reason for the dental visit first. "
+                                    "After the reason is clear, call the get_booking_options tool to suggest appointment slots. "
+                                    "If the caller gives a preferred date, confirm the date before calling the tool with that date. "
+                                    "After slot suggestions are given, if the caller says a different date, call the tool again with the updated date. "
+                                    "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
+                                    "If the caller rejects the suggested slots without a new date, ask what date they prefer. "
+                                    "If the caller still does not choose a slot, say the front desk will contact them to find another time. "
+                                    "Ask only one direct question at a time. "
                                     "Do not ask for the patient's name. "
                                 )
 
@@ -240,11 +258,51 @@ async def twilio_realtime(websocket: WebSocket):
                                         },
                                     },
                                     "tracing": "auto",
+                                    "tools": [
+                                        {
+                                            "type": "function",
+                                            "name": "get_booking_options",
+                                            "description": (
+                                                "Find the best two appointment slot suggestions using doctor preference, "
+                                                "dental reason or treatment, optional confirmed preferred date, doctor services, "
+                                                "doctor recurring availability, and doctor calendar events."
+                                            ),
+                                            "parameters": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "doctor_name": {
+                                                        "type": ["string", "null"],
+                                                        "description": "Doctor name mentioned by the caller, or null if no doctor preference.",
+                                                    },
+                                                    "reason": {
+                                                        "type": ["string", "null"],
+                                                        "description": "Dental visit reason, symptom, or treatment requested by the caller.",
+                                                    },
+                                                    "preferred_date_raw": {
+                                                        "type": ["string", "null"],
+                                                        "description": "Preferred date if the caller gave one.",
+                                                    },
+                                                    "preferred_date_confirmed": {
+                                                        "type": "boolean",
+                                                        "description": "True only after the assistant repeated the date and the caller confirmed it.",
+                                                    },
+                                                },
+                                                "required": [
+                                                    "doctor_name",
+                                                    "reason",
+                                                    "preferred_date_raw",
+                                                    "preferred_date_confirmed",
+                                                ],
+                                                "additionalProperties": False,
+                                            },
+                                        }
+                                    ],
+                                    "tool_choice": "auto",
                                 },
                             }
 
                             await openai_ws.send(json.dumps(session_update))
-                            print("Sent OpenAI session.update with clinic doctor context")
+                            print("Sent OpenAI session.update with clinic context and booking tool")
                             realtime_session_ready = True
 
                             saved_call = save_call_to_db(
@@ -263,7 +321,6 @@ async def twilio_realtime(websocket: WebSocket):
                                 print(f"Realtime call saved to DB: {current_call_id}")
                             else:
                                 print("Realtime call was not saved to DB")
-
 
                         elif event == "media":
                             if not realtime_session_ready:
@@ -286,7 +343,6 @@ async def twilio_realtime(websocket: WebSocket):
                             if current_call_id and transcript_parts:
                                 full_transcript = "\n".join(transcript_parts)
 
-                                # 1) Save the raw full transcript on the call record
                                 update_call(
                                     current_call_id,
                                     {
@@ -295,15 +351,11 @@ async def twilio_realtime(websocket: WebSocket):
                                     },
                                 )
 
-                                # 2) Build caller-only transcript for service matching
                                 caller_only_transcript = "\n".join(
                                     line for line in transcript_parts
                                     if line.startswith("Caller:")
                                 )
 
-                                # 3) After-call AI extraction
-                                # This is NOT realtime tool calling.
-                                # It runs only after the phone call has ended.
                                 appointment_details = await extract_appointment_details_with_openai(
                                     full_transcript,
                                     current_doctors,
@@ -324,13 +376,12 @@ async def twilio_realtime(websocket: WebSocket):
                                         or matched_doctor.get("full_name")
                                         or preferred_doctor_name
                                     )
-                                    
+
                                 print(
                                     "Final appointment details extracted after call: "
                                     f"{appointment_details}"
                                 )
 
-                                # 4) Match service using caller text + extracted reason
                                 service_match_input = caller_only_transcript
 
                                 if appointment_details.get("reason"):
@@ -341,7 +392,6 @@ async def twilio_realtime(websocket: WebSocket):
                                     service_match_input,
                                 )
 
-                                # 5) Normalize extracted fields
                                 patient_name = appointment_details.get("patient_name")
 
                                 reason = (
@@ -355,18 +405,24 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 date_confirmed = bool(appointment_details.get("date_confirmed"))
                                 time_confirmed = bool(appointment_details.get("time_confirmed"))
+
                                 if not date_confirmed:
                                     preferred_date_raw = None
 
                                 if not time_confirmed:
                                     preferred_time_raw = None
-                                    
+
                                 preferred_time_combined = (
                                     ((preferred_date_raw or "") + " " + (preferred_time_raw or "")).strip()
                                     or None
                                 )
 
-                                # 6) Save structured extraction
+                                urgency = (
+                                    service_match["default_urgency"]
+                                    if service_match
+                                    else "normal"
+                                )
+
                                 save_call_extraction(
                                     clinic_id=current_clinic_id,
                                     call_id=current_call_id,
@@ -382,11 +438,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     canonical_reason=reason,
                                     preferred_time_raw=preferred_time_raw,
                                     preferred_datetime=None,
-                                    urgency=(
-                                        service_match["default_urgency"]
-                                        if service_match
-                                        else "normal"
-                                    ),
+                                    urgency=urgency,
                                     confidence=appointment_details.get("confidence"),
                                     extraction_notes=json.dumps(
                                         appointment_details,
@@ -399,7 +451,6 @@ async def twilio_realtime(websocket: WebSocket):
                                     preferred_doctor_name=preferred_doctor_name,
                                 )
 
-                                # 7) Create appointment request if at least one useful field exists
                                 should_create_request = bool(
                                     patient_name
                                     or preferred_doctor_name
@@ -416,27 +467,34 @@ async def twilio_realtime(websocket: WebSocket):
                                         patient_name=patient_name,
                                         reason=reason,
                                         preferred_time=preferred_time_combined,
-                                        urgency=(
-                                            service_match["default_urgency"]
-                                            if service_match
-                                            else "normal"
-                                        ),
+                                        urgency=urgency,
                                         status="new",
                                         doctor_id=doctor_id,
-                                        preferred_doctor_name=preferred_doctor_name,                                    
+                                        preferred_doctor_name=preferred_doctor_name,
                                     )
 
                                     if appointment_request:
+                                        updates = {
+                                            "doctor_id": doctor_id,
+                                            "preferred_doctor_name": preferred_doctor_name,
+                                            "preferred_date_raw": preferred_date_raw,
+                                            "preferred_time_raw": preferred_time_raw,
+                                            "preferred_date_confirmed": date_confirmed,
+                                            "preferred_time_confirmed": time_confirmed,
+                                        }
+
+                                        if service_match:
+                                            updates.update(
+                                                {
+                                                    "service_category_id": service_match.get("category_id"),
+                                                    "service_category_name": service_match.get("category_name"),
+                                                    "duration_minutes": service_match.get("duration_minutes") or 30,
+                                                }
+                                            )
+
                                         update_appointment_request(
                                             appointment_request["id"],
-                                            {
-                                                "doctor_id": doctor_id,
-                                                "preferred_doctor_name": preferred_doctor_name,                                                
-                                                "preferred_date_raw": preferred_date_raw,
-                                                "preferred_time_raw": preferred_time_raw,
-                                                "preferred_date_confirmed": date_confirmed,
-                                                "preferred_time_confirmed": time_confirmed,
-                                            },
+                                            updates,
                                         )
 
                                     print(
@@ -466,10 +524,12 @@ async def twilio_realtime(websocket: WebSocket):
                     print(f"Twilio receive error: {e}")
                     await openai_ws.close()
 
-
             async def receive_from_openai():
-                nonlocal stream_sid, transcript_parts, ai_transcript_buffer
-
+                nonlocal stream_sid
+                nonlocal transcript_parts
+                nonlocal ai_transcript_buffer
+                nonlocal current_clinic_id
+                nonlocal current_doctors
 
                 try:
                     async for openai_message in openai_ws:
@@ -529,6 +589,56 @@ async def twilio_realtime(websocket: WebSocket):
 
                             ai_transcript_buffer = ""
 
+                        elif event_type == "response.function_call_arguments.done":
+                            tool_name = response.get("name")
+                            tool_call_id = response.get("call_id")
+                            arguments_raw = response.get("arguments") or "{}"
+
+                            print(f"Realtime tool call requested: {tool_name} args={arguments_raw}")
+
+                            if tool_name == "get_booking_options":
+                                try:
+                                    args = json.loads(arguments_raw)
+                                except Exception as e:
+                                    print(f"Failed to parse tool arguments: {e}")
+                                    args = {}
+
+                                tool_result = get_booking_options_for_ai(
+                                    clinic_id=current_clinic_id,
+                                    doctors=current_doctors,
+                                    doctor_name=args.get("doctor_name"),
+                                    reason=args.get("reason"),
+                                    preferred_date_raw=args.get("preferred_date_raw"),
+                                    preferred_date_confirmed=bool(
+                                        args.get("preferred_date_confirmed")
+                                    ),
+                                )
+
+                                print(f"Realtime tool result: {tool_result}")
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "function_call_output",
+                                                "call_id": tool_call_id,
+                                                "output": json.dumps(
+                                                    tool_result,
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        }
+                                    )
+                                )
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "response.create",
+                                        }
+                                    )
+                                )
 
                         elif event_type == "response.done":
                             print("OpenAI event: response.done")
@@ -611,6 +721,7 @@ def debug_supabase_test():
 def xml_escape(value: str | None) -> str:
     if not value:
         return ""
+
     return (
         value.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -675,6 +786,7 @@ async def twilio_voice(request: Request):
     </Connect>
 </Response>
 """
+
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -721,17 +833,12 @@ async def twilio_speech(request: Request):
             appointment_id = appointment_request["id"]
 
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-            <Response>
-                <Gather input="speech" action="/twilio/collect-name?appointment_id={appointment_id}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
-                    <Say voice="alice" language="en-US">
-                        Thank you. I can help create an appointment request.
-                        May I have your full name?
-                    </Say>
-                </Gather>
-
-                <Redirect method="POST">/twilio/collect-name?appointment_id={appointment_id}</Redirect>
-            </Response>
-            """
+<Response>
+    <Say voice="alice" language="en-US">
+        Thank you. I captured your request and the front desk will contact you to confirm.
+    </Say>
+</Response>
+"""
 
             return Response(content=twiml, media_type="application/xml")
 
@@ -768,127 +875,8 @@ async def twilio_speech(request: Request):
     </Say>
 </Response>
 """
+
     return Response(content=twiml, media_type="application/xml")
-
-
-
-@app.post("/twilio/collect-name")
-async def collect_name(request: Request):
-    form = await request.form()
-
-    appointment_id = request.query_params.get("appointment_id")
-    retry = int(request.query_params.get("retry", "0"))
-
-    patient_name = form.get("SpeechResult", "")
-
-    if not patient_name:
-        if retry < 2:
-            next_retry = retry + 1
-
-            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Gather input="speech" action="/twilio/collect-name?appointment_id={appointment_id}&amp;retry={next_retry}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
-        <Say voice="alice" language="en-US">
-            Sorry, I did not catch your name. Please say your full name again.
-        </Say>
-    </Gather>
-
-    <Redirect method="POST">/twilio/collect-name?appointment_id={appointment_id}&amp;retry={next_retry}</Redirect>
-</Response>
-"""
-            return Response(content=twiml, media_type="application/xml")
-
-        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Gather input="speech" action="/twilio/collect-time?appointment_id={appointment_id}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
-        <Say voice="alice" language="en-US">
-            That is okay. The front desk can confirm your name later.
-            What day or time would you prefer for this appointment?
-        </Say>
-    </Gather>
-
-    <Redirect method="POST">/twilio/collect-time?appointment_id={appointment_id}</Redirect>
-</Response>
-"""
-        return Response(content=twiml, media_type="application/xml")
-
-    if appointment_id:
-        update_appointment_request(
-            appointment_id=appointment_id,
-            updates={"patient_name": patient_name},
-        )
-
-    safe_name = xml_escape(patient_name)
-
-    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Gather input="speech" action="/twilio/collect-time?appointment_id={appointment_id}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
-        <Say voice="alice" language="en-US">
-            Thank you, {safe_name}. What day or time would you prefer for this appointment?
-        </Say>
-    </Gather>
-
-    <Redirect method="POST">/twilio/collect-time?appointment_id={appointment_id}</Redirect>
-</Response>
-"""
-    return Response(content=twiml, media_type="application/xml")
-
-
-@app.post("/twilio/collect-time")
-async def collect_time(request: Request):
-    form = await request.form()
-
-    appointment_id = request.query_params.get("appointment_id")
-    retry = int(request.query_params.get("retry", "0"))
-
-    preferred_time = form.get("SpeechResult", "")
-
-    if not preferred_time:
-        if retry < 2:
-            next_retry = retry + 1
-
-            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Gather input="speech" action="/twilio/collect-time?appointment_id={appointment_id}&amp;retry={next_retry}" method="POST" timeout="8" speechTimeout="auto" language="en-US">
-        <Say voice="alice" language="en-US">
-            Sorry, I did not catch the preferred time. Please say the day or time you would prefer.
-        </Say>
-    </Gather>
-
-    <Redirect method="POST">/twilio/collect-time?appointment_id={appointment_id}&amp;retry={next_retry}</Redirect>
-</Response>
-"""
-            return Response(content=twiml, media_type="application/xml")
-
-        twiml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice" language="en-US">
-        That is okay. The front desk will contact you to confirm a suitable appointment time.
-        Goodbye.
-    </Say>
-</Response>
-"""
-        return Response(content=twiml, media_type="application/xml")
-
-    if appointment_id:
-        update_appointment_request(
-            appointment_id=appointment_id,
-            updates={"preferred_time": preferred_time},
-        )
-
-    safe_time = xml_escape(preferred_time)
-
-    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice" language="en-US">
-        Thank you. I captured your preferred time as {safe_time}.
-        The front desk will contact you to confirm the appointment.
-        Goodbye.
-    </Say>
-</Response>
-"""
-    return Response(content=twiml, media_type="application/xml")
-
 
 
 async def extract_appointment_details_with_openai(
@@ -899,7 +887,7 @@ async def extract_appointment_details_with_openai(
         return {
             "patient_name": None,
             "preferred_doctor_name": None,
-            "doctor_confirmed": False,            
+            "doctor_confirmed": False,
             "reason": None,
             "preferred_date_raw": None,
             "preferred_time_raw": None,
@@ -911,6 +899,7 @@ async def extract_appointment_details_with_openai(
             "confidence": 0.0,
             "notes": "OpenAI client is not initialized.",
         }
+
     doctor_names = []
 
     for doctor in doctors or []:
@@ -919,67 +908,67 @@ async def extract_appointment_details_with_openai(
             doctor_names.append(name)
 
     doctor_list_text = ", ".join(doctor_names) if doctor_names else "No doctor list provided."
-    
+
     schema = {
         "type": "object",
         "properties": {
             "patient_name": {
                 "type": ["string", "null"],
-                "description": "Patient full name only if clearly provided or clearly confirmed."
-            },
-            "reason": {
-                "type": ["string", "null"],
-                "description": "Dental visit reason only if clearly provided or understandable."
-            },
-            "preferred_date_raw": {
-                "type": ["string", "null"],
-                "description": "Preferred appointment date only if clearly provided or confirmed."
-            },
-            "preferred_time_raw": {
-                "type": ["string", "null"],
-                "description": "Preferred appointment time only if clearly provided or confirmed."
-            },
-            "name_confirmed": {
-                "type": "boolean",
-                "description": "True only if the assistant repeated the name and the caller clearly confirmed it."
-            },
-            "date_confirmed": {
-                "type": "boolean",
-                "description": "True only if the assistant repeated the date and the caller clearly confirmed it."
-            },
-            "time_confirmed": {
-                "type": "boolean",
-                "description": "True only if the assistant repeated the time and the caller clearly confirmed it."
-            },
-            "reason_confirmed": {
-                "type": "boolean",
-                "description": "True if the reason was clearly stated. Explicit yes/no confirmation is not required for reason."
-            },
-            "language": {
-                "type": ["string", "null"],
-                "description": "Main caller language, such as fa, en, es, or unknown."
-            },
-            "confidence": {
-                "type": "number",
-                "description": "Extraction confidence from 0 to 1."
-            },
-            "notes": {
-                "type": ["string", "null"],
-                "description": "Short explanation of missing, rejected, unclear, or uncertain values."
+                "description": "Patient full name only if clearly provided or clearly confirmed.",
             },
             "preferred_doctor_name": {
                 "type": ["string", "null"],
-                "description": "The preferred doctor name if the caller clearly chose one, or 'no preference' if the caller clearly said they have no preference."
+                "description": "The preferred doctor name if the caller clearly chose one, or 'no preference' if the caller clearly said they have no preference.",
             },
             "doctor_confirmed": {
                 "type": "boolean",
-                "description": "True if the caller clearly selected a doctor or clearly said they have no preference. Explicit yes/no confirmation is not required."
-            },            
+                "description": "True if the caller clearly selected a doctor or clearly said they have no preference. Explicit yes/no confirmation is not required.",
+            },
+            "reason": {
+                "type": ["string", "null"],
+                "description": "Dental visit reason only if clearly provided or understandable.",
+            },
+            "preferred_date_raw": {
+                "type": ["string", "null"],
+                "description": "Preferred appointment date only if clearly provided or confirmed.",
+            },
+            "preferred_time_raw": {
+                "type": ["string", "null"],
+                "description": "Preferred appointment time or selected suggested slot time only if clearly provided or selected.",
+            },
+            "name_confirmed": {
+                "type": "boolean",
+                "description": "True only if the assistant repeated the name and the caller clearly confirmed it.",
+            },
+            "date_confirmed": {
+                "type": "boolean",
+                "description": "True only if the assistant repeated the date and the caller clearly confirmed it, or the caller selected a suggested slot with a specific date.",
+            },
+            "time_confirmed": {
+                "type": "boolean",
+                "description": "True only if the assistant repeated the time and the caller clearly confirmed it, or the caller selected a suggested slot with a specific time.",
+            },
+            "reason_confirmed": {
+                "type": "boolean",
+                "description": "True if the reason was clearly stated. Explicit yes/no confirmation is not required for reason.",
+            },
+            "language": {
+                "type": ["string", "null"],
+                "description": "Main caller language, such as fa, en, es, or unknown.",
+            },
+            "confidence": {
+                "type": "number",
+                "description": "Extraction confidence from 0 to 1.",
+            },
+            "notes": {
+                "type": ["string", "null"],
+                "description": "Short explanation of missing, rejected, unclear, selected, or uncertain values.",
+            },
         },
         "required": [
             "patient_name",
             "preferred_doctor_name",
-            "doctor_confirmed",            
+            "doctor_confirmed",
             "reason",
             "preferred_date_raw",
             "preferred_time_raw",
@@ -1012,17 +1001,19 @@ async def extract_appointment_details_with_openai(
                     "If the caller clearly says no preference, set preferred_doctor_name to 'no preference'. "
                     "If the caller did not clearly choose a doctor and did not say no preference, set preferred_doctor_name to null. "
 
-                    "For date and time confirmation, only mark date_confirmed or time_confirmed true if the assistant repeated that value "
+                    "For date and time confirmation, mark date_confirmed or time_confirmed true if the assistant repeated that value "
                     "and the caller clearly agreed directly after that confirmation question. "
+                    "Also mark them true if the assistant offered specific appointment slots and the caller clearly selected one of those slots. "
                     "Answers like yes, yeah, correct, درست, بله, آره, ja, oui count as confirmation. "
                     "Answers like no, nope, نه, いや count as rejection. "
 
                     "If the caller rejected a repeated date or time, do not save the rejected value. "
                     "If the caller corrected a value and then confirmed it, save the corrected value. "
+                    "If the caller selected the first or second offered slot, extract that slot's date and time from the assistant's offered options. "
                     "If a value is unclear, garbled, mixed-language, or uncertain, set it to null and explain in notes. "
 
                     "For reason, explicit yes/no confirmation is not required if the caller's reason was understandable."
-                )
+                ),
             },
             {
                 "role": "user",
@@ -1057,3 +1048,37 @@ async def extract_appointment_details_with_openai(
             "confidence": 0.0,
             "notes": f"Failed to parse extraction JSON: {e}",
         }
+    
+
+@app.get("/debug/booking-options")
+def debug_booking_options(
+    clinic_id: str,
+    doctor_name: str | None = None,
+    reason: str = "my tooth hurts",
+    preferred_date_raw: str | None = None,
+    preferred_date_confirmed: bool = False,
+):
+    try:
+        doctors = get_active_doctors_for_clinic(clinic_id)
+
+        result = get_booking_options_for_ai(
+            clinic_id=clinic_id,
+            doctors=doctors,
+            doctor_name=doctor_name,
+            reason=reason,
+            preferred_date_raw=preferred_date_raw,
+            preferred_date_confirmed=preferred_date_confirmed,
+        )
+
+        return {
+            "ok": True,
+            "doctors_loaded": doctors,
+            "booking_result": result,
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+            "error_type": type(e).__name__,
+        }    
