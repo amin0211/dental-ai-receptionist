@@ -19,19 +19,26 @@ export default function LoginForm() {
     setErrorMessage("");
     setIsLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
       password,
     });
 
     setIsLoading(false);
 
     if (error) {
+      console.error("Login error:", error.message);
       setErrorMessage("Invalid email or password.");
       return;
     }
 
+    if (!data.session) {
+      setErrorMessage("Login failed. Please try again.");
+      return;
+    }
+
     router.push("/dashboard");
+    router.refresh();
   }
 
   return (
