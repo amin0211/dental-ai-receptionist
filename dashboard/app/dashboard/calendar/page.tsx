@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  FormEvent,
-  ReactNode,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import DashboardShell from "@/components/layout/DashboardShell";
 import { useClinic } from "@/components/providers/ClinicProvider";
@@ -178,6 +172,152 @@ function generateMonthEvents({
   return events;
 }
 
+function getDatesBetween(startDate: string, endDate: string) {
+  const dates: Date[] = [];
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+
+  let current = new Date(start);
+
+  while (current <= end) {
+    dates.push(new Date(current));
+    current = addDays(current, 1);
+  }
+
+  return dates;
+}
+
+function buildTemporaryRuleForValidation({
+  clinicId,
+  doctorId,
+  startDate,
+  endDate,
+  startTime,
+  endTime,
+  repeatType,
+  timezone,
+  notes,
+}: {
+  clinicId: string;
+  doctorId: string | null;
+  startDate: string;
+  endDate: string | null;
+  startTime: string;
+  endTime: string;
+  repeatType: CalendarAvailabilityRule["repeat_type"];
+  timezone: string;
+  notes: string | null;
+}): CalendarAvailabilityRule {
+  const startDateObject = new Date(`${startDate}T00:00:00`);
+
+  return {
+    id: "temporary-validation-rule",
+    clinic_id: clinicId,
+    doctor_id: doctorId,
+    start_date: startDate,
+    end_date: endDate,
+    day_of_week:
+      repeatType === "weekly" || repeatType === "custom"
+        ? startDateObject.getDay()
+        : null,
+    start_time: startTime,
+    end_time: endTime,
+    timezone,
+    repeat_type: repeatType,
+    is_active: true,
+    notes,
+    created_at: "",
+    updated_at: "",
+  };
+}
+
+async function validateDoctorAvailabilityInsideClinic({
+  clinicId,
+  doctorId,
+  startDate,
+  endDate,
+  startTime,
+  endTime,
+  repeatType,
+  timezone,
+  notes,
+}: {
+  clinicId: string;
+  doctorId: string | null;
+  startDate: string;
+  endDate: string | null;
+  startTime: string;
+  endTime: string;
+  repeatType: CalendarAvailabilityRule["repeat_type"];
+  timezone: string;
+  notes: string | null;
+}) {
+  if (!doctorId) return;
+
+  const validationEndDate = endDate || startDate;
+
+  const temporaryDoctorRule = buildTemporaryRuleForValidation({
+    clinicId,
+    doctorId,
+    startDate,
+    endDate: validationEndDate,
+    startTime,
+    endTime,
+    repeatType,
+    timezone,
+    notes,
+  });
+
+  const affectedDates = getDatesBetween(startDate, validationEndDate).filter(
+    (date) => appliesToDate(temporaryDoctorRule, date)
+  );
+
+  if (affectedDates.length === 0) {
+    throw new Error("No dates match this availability rule.");
+  }
+
+  const clinicRules = await getCalendarAvailabilityRules({
+    clinicId,
+    doctorId: null,
+    monthStart: startDate,
+    monthEnd: validationEndDate,
+  });
+
+  const clinicExceptions = await getCalendarAvailabilityExceptions({
+    clinicId,
+    ruleIds: clinicRules.map((rule) => rule.id),
+    monthStart: startDate,
+    monthEnd: validationEndDate,
+  });
+
+  const clinicEvents = generateMonthEvents({
+    rules: clinicRules,
+    exceptions: clinicExceptions,
+    monthDays: affectedDates,
+  });
+
+  for (const date of affectedDates) {
+    const dateString = formatDate(date);
+
+    const matchingClinicEvent = clinicEvents.find((clinicEvent) => {
+      if (clinicEvent.date !== dateString) return false;
+
+      return (
+        clinicEvent.startTime.slice(0, 5) <= startTime.slice(0, 5) &&
+        clinicEvent.endTime.slice(0, 5) >= endTime.slice(0, 5)
+      );
+    });
+
+    if (!matchingClinicEvent) {
+      throw new Error(
+        `Doctor availability must be inside clinic availability on ${getDateLabel(
+          dateString
+        )}. Clinic does not cover ${startTime} - ${endTime}.`
+      );
+    }
+  }
+}
+
 export default function CalendarPage() {
   const { clinic, clinicId, isLoadingClinic } = useClinic();
   const currentClinicId = clinicId || "";
@@ -187,6 +327,7 @@ export default function CalendarPage() {
   const [isSaving, setIsSaving] = useState(false);
 
   const [errorMessage, setErrorMessage] = useState("");
+  const [formErrorMessage, setFormErrorMessage] = useState("");
 
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [scope, setScope] = useState("all");
@@ -217,9 +358,10 @@ export default function CalendarPage() {
   const [formTimezone, setFormTimezone] = useState("America/Vancouver");
   const [formNotes, setFormNotes] = useState("");
 
-  const monthDays = useMemo(() => getCalendarGridDays(currentMonth), [
-    currentMonth,
-  ]);
+  const monthDays = useMemo(
+    () => getCalendarGridDays(currentMonth),
+    [currentMonth]
+  );
 
   const monthStart = formatDate(getMonthStart(currentMonth));
   const monthEnd = formatDate(getMonthEnd(currentMonth));
@@ -253,68 +395,69 @@ export default function CalendarPage() {
     return map;
   }, [visibleEvents]);
 
-useEffect(() => {
-  async function loadPage() {
-    if (isLoadingClinic) return;
+  useEffect(() => {
+    async function loadPage() {
+      if (isLoadingClinic) return;
 
-    try {
-      setErrorMessage("");
+      try {
+        setErrorMessage("");
+        setFormErrorMessage("");
 
-      if (!currentClinicId) {
-        setErrorMessage("Clinic was not found for this account.");
+        if (!currentClinicId) {
+          setErrorMessage("Clinic was not found for this account.");
+          setIsCheckingSession(false);
+          setIsLoadingCalendar(false);
+          return;
+        }
+
+        setIsCheckingSession(false);
+
+        const loadedDoctors = await getClinicDoctors(currentClinicId);
+        setDoctors(loadedDoctors);
+
+        await loadCalendar();
+      } catch (error) {
+        console.error("Load calendar page error:", error);
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to load calendar."
+        );
         setIsCheckingSession(false);
         setIsLoadingCalendar(false);
-        return;
       }
-
-      setIsCheckingSession(false);
-
-      const loadedDoctors = await getClinicDoctors(currentClinicId);
-      setDoctors(loadedDoctors);
-
-      await loadCalendar();
-    } catch (error) {
-      console.error("Load calendar page error:", error);
-      setErrorMessage(
-        error instanceof Error ? error.message : "Failed to load calendar."
-      );
-      setIsCheckingSession(false);
-      setIsLoadingCalendar(false);
     }
-  }
 
-  loadPage();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [currentClinicId, isLoadingClinic]);
+    loadPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentClinicId, isLoadingClinic]);
 
-useEffect(() => {
-  if (!isCheckingSession && currentClinicId) {
-    loadCalendar();
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [currentMonth, scope, currentClinicId]);
-
-useEffect(() => {
-  if (!selectedEvent) return;
-
-  if (editMode === "only_this_day") {
-    setFormStartDate(selectedEvent.date);
-    setFormEndDate(selectedEvent.date);
-    return;
-  }
-
-  if (editMode === "this_and_future") {
-    setFormStartDate(selectedEvent.date);
-
-    const originalEndDate = selectedEvent.originalRule.end_date;
-
-    if (originalEndDate && originalEndDate >= selectedEvent.date) {
-      setFormEndDate(originalEndDate);
-    } else {
-      setFormEndDate("");
+  useEffect(() => {
+    if (!isCheckingSession && currentClinicId) {
+      loadCalendar();
     }
-  }
-}, [editMode, selectedEvent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentMonth, scope, currentClinicId]);
+
+  useEffect(() => {
+    if (!selectedEvent) return;
+
+    if (editMode === "only_this_day") {
+      setFormStartDate(selectedEvent.date);
+      setFormEndDate(selectedEvent.date);
+      return;
+    }
+
+    if (editMode === "this_and_future") {
+      setFormStartDate(selectedEvent.date);
+
+      const originalEndDate = selectedEvent.originalRule.end_date;
+
+      if (originalEndDate && originalEndDate >= selectedEvent.date) {
+        setFormEndDate(originalEndDate);
+      } else {
+        setFormEndDate("");
+      }
+    }
+  }, [editMode, selectedEvent]);
 
   async function loadCalendar() {
     try {
@@ -356,33 +499,38 @@ useEffect(() => {
     }
   }
 
-function openAddModal(dateString: string) {
-  setErrorMessage("");
+  function openAddModal(dateString: string) {
+    setErrorMessage("");
+    setFormErrorMessage("");
 
-  if (scope === "all") {
-        setErrorMessage("Select Clinic availability or a doctor from the top dropdown before adding availability.");
-    return;
+    if (scope === "all") {
+      setErrorMessage(
+        "Select Clinic availability or a doctor from the top dropdown before adding availability."
+      );
+      return;
+    }
+
+    setSelectedDate(dateString);
+    setFormStartDate(dateString);
+    setFormEndDate("");
+    setFormStartTime("09:00");
+    setFormEndTime("17:00");
+    setFormRepeatType("none");
+    setFormTimezone(clinic?.timezone || "America/Vancouver");
+    setFormNotes("");
+
+    if (scope === "clinic") {
+      setFormDoctorId(null);
+    } else if (scope.startsWith("doctor:")) {
+      setFormDoctorId(scope.replace("doctor:", ""));
+    }
+
+    setIsAddModalOpen(true);
   }
-
-  setSelectedDate(dateString);
-  setFormStartDate(dateString);
-  setFormEndDate("");
-  setFormStartTime("09:00");
-  setFormEndTime("17:00");
-  setFormRepeatType("none");
-  setFormTimezone(clinic?.timezone || "America/Vancouver");
-  setFormNotes("");
-
-  if (scope === "clinic") {
-    setFormDoctorId(null);
-  } else if (scope.startsWith("doctor:")) {
-    setFormDoctorId(scope.replace("doctor:", ""));
-  }
-
-  setIsAddModalOpen(true);
-}
 
   function openEventModal(event: CalendarEvent) {
+    setFormErrorMessage("");
+    setErrorMessage("");
     setSelectedEvent(event);
     setEditMode("only_this_day");
 
@@ -403,27 +551,43 @@ function openAddModal(dateString: string) {
 
     try {
       setErrorMessage("");
+      setFormErrorMessage("");
 
       if (!formStartDate) {
-        setErrorMessage("Start date is required.");
+        setFormErrorMessage("Start date is required.");
         return;
       }
 
       if (!formStartTime || !formEndTime) {
-        setErrorMessage("Start time and end time are required.");
+        setFormErrorMessage("Start time and end time are required.");
         return;
       }
 
       if (formStartTime >= formEndTime) {
-        setErrorMessage("Start time must be before end time.");
+        setFormErrorMessage("Start time must be before end time.");
         return;
       }
-      
-        if (formEndDate && formEndDate < formStartDate) {
-        setErrorMessage("Repeat until must be the same day as start date or after it.");
+
+      if (formEndDate && formEndDate < formStartDate) {
+        setFormErrorMessage(
+          "Repeat until must be the same day as start date or after it."
+        );
         return;
-        }
+      }
+
       setIsSaving(true);
+
+      await validateDoctorAvailabilityInsideClinic({
+        clinicId: currentClinicId,
+        doctorId: formDoctorId,
+        startDate: formStartDate,
+        endDate: formEndDate || null,
+        startTime: formStartTime,
+        endTime: formEndTime,
+        repeatType: formRepeatType,
+        timezone: formTimezone,
+        notes: formNotes.trim() ? formNotes.trim() : null,
+      });
 
       const startDateObject = new Date(`${formStartDate}T00:00:00`);
       const dayOfWeek =
@@ -449,50 +613,72 @@ function openAddModal(dateString: string) {
       await loadCalendar();
 
       setIsSaving(false);
-    } catch (error) {
-      console.error("Create availability error:", error);
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Failed to create availability."
-      );
-      setIsSaving(false);
+      } catch (error) {
+        setFormErrorMessage(
+          error instanceof Error
+            ? error.message
+            : "Failed to create availability."
+        );
+        setIsSaving(false);
+      }
     }
-  }
 
-  async function handleUpdateAvailability(event: FormEvent<HTMLFormElement>) {
+    async function handleUpdateAvailability(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!selectedEvent) return;
 
     try {
       setErrorMessage("");
+      setFormErrorMessage("");
 
       if (!formStartDate) {
-        setErrorMessage("Start date is required.");
+        setFormErrorMessage("Start date is required.");
         return;
       }
 
       if (!formEndDate && editMode === "only_this_day") {
-        setErrorMessage("Repeat until is required for only this day.");
+        setFormErrorMessage("Repeat until is required for only this day.");
         return;
       }
 
       if (formStartTime >= formEndTime) {
-        setErrorMessage("Start time must be before end time.");
+        setFormErrorMessage("Start time must be before end time.");
         return;
       }
 
-    if (
-    editMode === "only_this_day" &&
-    formEndDate &&
-    formEndDate < formStartDate
-    ) {
-    setErrorMessage("Repeat until must be the same day as start date or after it.");
-    return;
-    }
+      if (
+        editMode === "only_this_day" &&
+        formEndDate &&
+        formEndDate < formStartDate
+      ) {
+        setFormErrorMessage(
+          "Repeat until must be the same day as start date or after it."
+        );
+        return;
+      }
 
       setIsSaving(true);
+
+      await validateDoctorAvailabilityInsideClinic({
+        clinicId: currentClinicId,
+        doctorId: selectedEvent.originalRule.doctor_id,
+        startDate: formStartDate,
+        endDate:
+          editMode === "only_this_day"
+            ? formStartDate
+            : formEndDate ||
+              selectedEvent.originalRule.end_date ||
+              formStartDate,
+        startTime: formStartTime,
+        endTime: formEndTime,
+        repeatType:
+          editMode === "only_this_day"
+            ? "none"
+            : selectedEvent.originalRule.repeat_type,
+        timezone: formTimezone,
+        notes: formNotes.trim() ? formNotes.trim() : null,
+      });
 
       if (editMode === "only_this_day") {
         await updateCalendarAvailabilityOnlyThisDay({
@@ -505,21 +691,23 @@ function openAddModal(dateString: string) {
         });
       }
 
-    if (editMode === "this_and_future") {
-    const safeEndDate =
-        formEndDate && formEndDate >= selectedEvent.date ? formEndDate : null;
+      if (editMode === "this_and_future") {
+        const safeEndDate =
+          formEndDate && formEndDate >= selectedEvent.date
+            ? formEndDate
+            : null;
 
-    await updateCalendarAvailabilityThisAndFuture({
-        clinicId: currentClinicId,
-        originalRule: selectedEvent.originalRule,
-        clickedDate: selectedEvent.date,
-        newEndDate: safeEndDate,
-        startTime: formStartTime,
-        endTime: formEndTime,
-        timezone: formTimezone,
-        notes: formNotes.trim() ? formNotes.trim() : null,
-    });
-    }
+        await updateCalendarAvailabilityThisAndFuture({
+          clinicId: currentClinicId,
+          originalRule: selectedEvent.originalRule,
+          clickedDate: selectedEvent.date,
+          newEndDate: safeEndDate,
+          startTime: formStartTime,
+          endTime: formEndTime,
+          timezone: formTimezone,
+          notes: formNotes.trim() ? formNotes.trim() : null,
+        });
+      }
 
       setIsEventModalOpen(false);
       setSelectedEvent(null);
@@ -527,15 +715,14 @@ function openAddModal(dateString: string) {
       await loadCalendar();
 
       setIsSaving(false);
-    } catch (error) {
-      console.error("Update availability error:", error);
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Failed to update availability."
-      );
-      setIsSaving(false);
-    }
+      } catch (error) {
+        setFormErrorMessage(
+          error instanceof Error
+            ? error.message
+            : "Failed to update availability."
+        );
+        setIsSaving(false);
+      }
   }
 
   async function handleRemoveAvailability() {
@@ -551,6 +738,7 @@ function openAddModal(dateString: string) {
 
     try {
       setErrorMessage("");
+      setFormErrorMessage("");
       setIsSaving(true);
 
       if (editMode === "only_this_day") {
@@ -576,8 +764,7 @@ function openAddModal(dateString: string) {
 
       setIsSaving(false);
     } catch (error) {
-      console.error("Remove availability error:", error);
-      setErrorMessage(
+      setFormErrorMessage(
         error instanceof Error
           ? error.message
           : "Failed to remove availability."
@@ -755,13 +942,13 @@ function openAddModal(dateString: string) {
         <AvailabilityModal
           mode="add"
           title="Add Availability"
+          formErrorMessage={formErrorMessage}
           selectedDateLabel={selectedDate ? getDateLabel(selectedDate) : ""}
           availabilityForLabel={
             formDoctorId
               ? doctorNameById[formDoctorId] || "Doctor"
               : "Clinic availability"
           }
-          showAvailabilityForField={false}
           editMode={editMode}
           setEditMode={setEditMode}
           submitLabel={isSaving ? "Saving..." : "Save Availability"}
@@ -793,13 +980,13 @@ function openAddModal(dateString: string) {
         <AvailabilityModal
           mode="edit"
           title="Edit Availability"
+          formErrorMessage={formErrorMessage}
           selectedDateLabel={getDateLabel(selectedEvent.date)}
           availabilityForLabel={
             selectedEvent.doctorId
               ? doctorNameById[selectedEvent.doctorId] || "Doctor"
               : "Clinic availability"
           }
-          showAvailabilityForField={false}
           editMode={editMode}
           setEditMode={setEditMode}
           submitLabel={isSaving ? "Saving..." : "Save Changes"}
@@ -836,18 +1023,15 @@ function openAddModal(dateString: string) {
 function AvailabilityModal({
   mode,
   title,
+  formErrorMessage,
   selectedDateLabel,
   availabilityForLabel,
-  showAvailabilityForField,
   editMode,
   setEditMode,
   submitLabel,
   onClose,
   onSubmit,
   onRemove,
-  doctors,
-  formDoctorId,
-  setFormDoctorId,
   formStartDate,
   setFormStartDate,
   formEndDate,
@@ -866,9 +1050,9 @@ function AvailabilityModal({
 }: {
   mode: "add" | "edit";
   title: string;
+  formErrorMessage: string;
   selectedDateLabel: string;
   availabilityForLabel: string;
-  showAvailabilityForField: boolean;
   editMode: EditMode;
   setEditMode: (value: EditMode) => void;
   submitLabel: string;
@@ -893,7 +1077,6 @@ function AvailabilityModal({
   formNotes: string;
   setFormNotes: (value: string) => void;
   isSaving: boolean;
-  footer?: ReactNode;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
@@ -935,7 +1118,11 @@ function AvailabilityModal({
         </div>
 
         <form onSubmit={onSubmit} className="space-y-5 p-5">
-
+          {formErrorMessage && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+              {formErrorMessage}
+            </div>
+          )}
 
           {mode === "edit" && (
             <div>

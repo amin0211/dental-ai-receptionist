@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import DashboardShell from "@/components/layout/DashboardShell";
 import { useClinic } from "@/components/providers/ClinicProvider";
+import AppointmentScheduleEditor from "@/components/appointments/AppointmentScheduleEditor";
 
 type AppointmentRequest = {
   id: string;
@@ -19,6 +20,8 @@ type AppointmentRequest = {
   created_at: string;
   service_category_name?: string | null;
   duration_minutes?: number | null;
+  doctor_id?: string | null;
+  service_category_id?: string | null;
 };
 
 function formatDateTime(value: string) {
@@ -74,65 +77,234 @@ export default function RequestsPage() {
   const { clinicId, isLoadingClinic } = useClinic();
 
   const [requests, setRequests] = useState<AppointmentRequest[]>([]);
+  const [selectedRequest, setSelectedRequest] =
+    useState<AppointmentRequest | null>(null);
+
+  const [isSchedulePickerOpen, setIsSchedulePickerOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+
   const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+
+  const [patientName, setPatientName] = useState("");
+  const [patientPhone, setPatientPhone] = useState("");
+  const [reason, setReason] = useState("");
+  const [serviceCategoryName, setServiceCategoryName] = useState("");
+  const [preferredDoctorName, setPreferredDoctorName] = useState("");
+  const [preferredDateRaw, setPreferredDateRaw] = useState("");
+  const [preferredTimeRaw, setPreferredTimeRaw] = useState("");
+  const [urgency, setUrgency] = useState("normal");
+  const [durationMinutes, setDurationMinutes] = useState("");
 
   const pageTitle = useMemo(() => getStatusTitle(statusFilter), [statusFilter]);
 
-  useEffect(() => {
-    async function loadRequests() {
-      if (isLoadingClinic) return;
+  async function loadRequests() {
+    if (isLoadingClinic) return;
 
-      setIsLoading(true);
-      setErrorMessage("");
+    setIsLoading(true);
+    setErrorMessage("");
 
-      if (!clinicId) {
-        setErrorMessage("Clinic was not found for this account.");
-        setIsLoading(false);
-        return;
-      }
-
-      let query = supabase
-        .from("appointment_requests")
-        .select(
-          `
-          id,
-          patient_name,
-          patient_phone,
-          reason,
-          preferred_doctor_name,
-          preferred_date_raw,
-          preferred_time_raw,
-          status,
-          urgency,
-          created_at,
-          service_category_name,
-          duration_minutes
-        `
-        )
-        .eq("clinic_id", clinicId)
-        .order("created_at", { ascending: false })
-        .limit(50);
-
-      if (statusFilter) {
-        query = query.eq("status", statusFilter);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        console.error("Error loading appointment requests:", error);
-        setErrorMessage(error.message);
-        setIsLoading(false);
-        return;
-      }
-
-      setRequests(data || []);
+    if (!clinicId) {
+      setErrorMessage("Clinic was not found for this account.");
       setIsLoading(false);
+      return;
     }
 
+    let query = supabase
+      .from("appointment_requests")
+      .select(
+        `
+        id,
+        patient_name,
+        patient_phone,
+        reason,
+        doctor_id,
+        service_category_id,
+        preferred_doctor_name,
+        preferred_date_raw,
+        preferred_time_raw,
+        status,
+        urgency,
+        created_at,
+        service_category_name,
+        duration_minutes
+      `
+      )
+      .eq("clinic_id", clinicId)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (statusFilter) {
+      query = query.eq("status", statusFilter);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error("Error loading appointment requests:", error);
+      setErrorMessage(error.message);
+      setIsLoading(false);
+      return;
+    }
+
+    setRequests(data || []);
+    setIsLoading(false);
+  }
+
+  useEffect(() => {
     loadRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clinicId, isLoadingClinic, statusFilter]);
+
+  function openRequestDetail(request: AppointmentRequest) {
+    setSelectedRequest(request);
+
+    setPatientName(request.patient_name || "");
+    setPatientPhone(request.patient_phone || "");
+    setReason(request.reason || "");
+    setServiceCategoryName(request.service_category_name || "");
+    setPreferredDoctorName(request.preferred_doctor_name || "");
+    setPreferredDateRaw(request.preferred_date_raw || "");
+    setPreferredTimeRaw(request.preferred_time_raw || "");
+    setUrgency(request.urgency || "normal");
+    setDurationMinutes(
+      request.duration_minutes ? String(request.duration_minutes) : ""
+    );
+
+    setIsDetailOpen(true);
+  }
+
+  async function handleSaveChanges(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!selectedRequest) {
+      setErrorMessage("No request selected.");
+      return;
+    }
+
+    if (!clinicId) {
+      setErrorMessage("Clinic was not found for this account.");
+      return;
+    }
+
+
+    try {
+      setIsSaving(true);
+      setErrorMessage("");
+      setSuccessMessage("");
+
+      const durationNumber = durationMinutes.trim()
+        ? Number(durationMinutes)
+        : null;
+
+      if (
+        durationNumber !== null &&
+        (!Number.isFinite(durationNumber) || durationNumber <= 0)
+      ) {
+        setErrorMessage("Duration must be a positive number.");
+        setIsSaving(false);
+        return;
+      }
+
+      const { error } = await supabase
+        .from("appointment_requests")
+        .update({
+          patient_name: patientName.trim() ? patientName.trim() : null,
+          patient_phone: patientPhone.trim() ? patientPhone.trim() : null,
+          reason: reason.trim() ? reason.trim() : null,
+          service_category_name: serviceCategoryName.trim()
+            ? serviceCategoryName.trim()
+            : null,
+          preferred_doctor_name: preferredDoctorName.trim()
+            ? preferredDoctorName.trim()
+            : null,
+          preferred_date_raw: preferredDateRaw.trim()
+            ? preferredDateRaw.trim()
+            : null,
+          preferred_time_raw: preferredTimeRaw.trim()
+            ? preferredTimeRaw.trim()
+            : null,
+          urgency,
+          duration_minutes: durationNumber,
+        })
+        .eq("id", selectedRequest.id)
+        .eq("clinic_id", clinicId);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      setSuccessMessage("Request updated successfully.");
+      await loadRequests();
+
+      setIsSaving(false);
+    } catch (error) {
+      console.error("Save request error:", error);
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to update request."
+      );
+      setIsSaving(false);
+    }
+  }
+
+async function handleChangeStatus(nextStatus: string) {
+  if (!selectedRequest) {
+    setErrorMessage("No request selected.");
+    return;
+  }
+
+  if (!clinicId) {
+    setErrorMessage("Clinic was not found for this account.");
+    return;
+  }
+
+  if (nextStatus === "confirmed") {
+    setIsSchedulePickerOpen(true);
+    return;
+  }
+
+  try {
+    setIsSaving(true);
+    setErrorMessage("");
+    setSuccessMessage("");
+
+    const { data, error } = await supabase
+      .from("appointment_requests")
+      .update({
+        status: nextStatus,
+      })
+      .eq("id", selectedRequest.id)
+      .eq("clinic_id", clinicId)
+      .select("id, status")
+      .single();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    if (!data?.id) {
+      throw new Error("Request status was not updated.");
+    }
+
+    setSuccessMessage(`Request moved to ${nextStatus}.`);
+    setIsDetailOpen(false);
+    setSelectedRequest(null);
+
+    await loadRequests();
+
+    setIsSaving(false);
+  } catch (error) {
+    console.error("Update request status error:", error);
+    setErrorMessage(
+      error instanceof Error
+        ? error.message
+        : "Failed to update request status."
+    );
+    setIsSaving(false);
+  }
+}
 
   if (isLoadingClinic) {
     return (
@@ -147,8 +319,14 @@ export default function RequestsPage() {
   return (
     <DashboardShell
       title="Appointment Requests"
-      description="Review appointment requests created by the AI receptionist."
+      description="Review and manage appointment requests created by the AI receptionist."
     >
+      {successMessage && (
+        <div className="mb-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+          {successMessage}
+        </div>
+      )}
+
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-lg font-bold text-slate-900">{pageTitle}</h2>
@@ -180,7 +358,7 @@ export default function RequestsPage() {
 
         {!isLoading && !errorMessage && requests.length > 0 && (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1000px] text-left text-sm">
+            <table className="w-full min-w-[1100px] text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-5 py-3 font-semibold">Created</th>
@@ -192,6 +370,9 @@ export default function RequestsPage() {
                   <th className="px-5 py-3 font-semibold">Preferred</th>
                   <th className="px-5 py-3 font-semibold">Status</th>
                   <th className="px-5 py-3 font-semibold">Urgency</th>
+                  <th className="px-5 py-3 text-right font-semibold">
+                    Actions
+                  </th>
                 </tr>
               </thead>
 
@@ -248,6 +429,16 @@ export default function RequestsPage() {
                     <td className="px-5 py-4 text-slate-700">
                       {request.urgency || "-"}
                     </td>
+
+                    <td className="px-5 py-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => openRequestDetail(request)}
+                        className="font-semibold text-blue-600 hover:text-blue-700"
+                      >
+                        Review
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -255,6 +446,223 @@ export default function RequestsPage() {
           </div>
         )}
       </section>
+
+      {isDetailOpen && selectedRequest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white shadow-xl">
+            <div className="flex items-start justify-between border-b border-slate-100 p-5">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">
+                  Review Request
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Edit request details and choose the next status.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsDetailOpen(false)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveChanges} className="space-y-5 p-5">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Patient Name
+                  </label>
+                  <input
+                    value={patientName}
+                    onChange={(event) => setPatientName(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Patient Phone
+                  </label>
+                  <input
+                    value={patientPhone}
+                    onChange={(event) => setPatientPhone(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Reason
+                  </label>
+                  <input
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Service
+                  </label>
+                  <input
+                    value={serviceCategoryName}
+                    onChange={(event) =>
+                      setServiceCategoryName(event.target.value)
+                    }
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Preferred Doctor
+                  </label>
+                  <input
+                    value={preferredDoctorName}
+                    onChange={(event) =>
+                      setPreferredDoctorName(event.target.value)
+                    }
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Urgency
+                  </label>
+                  <select
+                    value={urgency}
+                    onChange={(event) => setUrgency(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  >
+                    <option value="low">Low</option>
+                    <option value="normal">Normal</option>
+                    <option value="urgent">Urgent</option>
+                    <option value="emergency">Emergency</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Preferred Date
+                  </label>
+                  <input
+                    value={preferredDateRaw}
+                    onChange={(event) =>
+                      setPreferredDateRaw(event.target.value)
+                    }
+                    placeholder="Example: next Monday"
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Preferred Time
+                  </label>
+                  <input
+                    value={preferredTimeRaw}
+                    onChange={(event) =>
+                      setPreferredTimeRaw(event.target.value)
+                    }
+                    placeholder="Example: afternoon"
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-slate-700">
+                    Duration Minutes
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={durationMinutes}
+                    onChange={(event) => setDurationMinutes(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSaving}
+                className="w-full rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSaving ? "Saving..." : "Save Changes"}
+              </button>
+            </form>
+
+            <div className="border-t border-slate-100 p-5">
+              <h3 className="text-sm font-bold text-slate-900">
+                Change Status
+              </h3>
+
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => handleChangeStatus("needs_followup")}
+                  className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                >
+                  Needs Follow-up
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => handleChangeStatus("slot_offered")}
+                  className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-800 hover:bg-indigo-100 disabled:opacity-60"
+                >
+                  Slot Offered
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => handleChangeStatus("confirmed")}
+                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+                >
+                  Confirm
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => handleChangeStatus("cancelled")}
+                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 hover:bg-red-100 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isSchedulePickerOpen && selectedRequest && clinicId && (
+        <AppointmentScheduleEditor
+          mode="confirm"
+          clinicId={clinicId}
+          request={selectedRequest}
+          onClose={() => setIsSchedulePickerOpen(false)}
+          onSaved={async () => {
+            setIsSchedulePickerOpen(false);
+            setIsDetailOpen(false);
+            setSelectedRequest(null);
+            await loadRequests();
+          }}
+        />
+      )}  
     </DashboardShell>
   );
 }

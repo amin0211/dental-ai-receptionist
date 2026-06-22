@@ -1,10 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import DashboardShell from "@/components/layout/DashboardShell";
 import { useClinic } from "@/components/providers/ClinicProvider";
+import {
+  ClinicDoctor,
+  getClinicDoctors,
+  getIncompleteCallExtractionCount,
+} from "@/lib/supabaseService";
 
 type DashboardStats = {
   newRequests: number;
@@ -14,50 +19,199 @@ type DashboardStats = {
   incompleteCalls: number;
 };
 
-type AppointmentRequest = {
+type TodayAppointment = {
   id: string;
+  clinic_id: string;
   patient_name: string | null;
-  service_name?: string | null;
-  doctor_name?: string | null;
-  doctor_id?: string | null;
-  service_category_id?: string | null;
-  status: string | null;
-  created_at: string | null;
+  patient_phone: string | null;
+  doctor_id: string | null;
+  service_name: string | null;
+  start_time: string;
+  end_time: string;
+  duration_minutes: number;
+  notes: string | null;
 };
+
+type ScheduleCellInfo = {
+  appointment: TodayAppointment | null;
+  isStart: boolean;
+};
+
+const DAY_START_MINUTES = 8 * 60;
+const DAY_END_MINUTES = 18 * 60;
+const SLOT_MINUTES = 30;
 
 function StatCard({
   title,
   value,
   href,
   isLoading,
+  tone,
 }: {
   title: string;
   value: number;
   href: string;
   isLoading: boolean;
+  tone: "blue" | "amber" | "violet" | "emerald" | "rose";
 }) {
+  const toneClass = {
+    blue: "bg-blue-500",
+    amber: "bg-amber-500",
+    violet: "bg-violet-500",
+    emerald: "bg-emerald-500",
+    rose: "bg-rose-500",
+  }[tone];
+
   return (
     <Link
       href={href}
-      className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+      className="group min-w-[170px] flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/30 hover:shadow-md"
     >
-      <p className="truncate text-sm font-medium text-slate-500">{title}</p>
-      <p className="mt-3 text-3xl font-bold text-slate-900">
-        {isLoading ? "..." : value}
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="truncate text-sm font-semibold text-slate-500">
+          {title}
+        </p>
+
+        <span className={`h-2.5 w-2.5 rounded-full ${toneClass}`} />
+      </div>
+
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <p className="text-3xl font-black tracking-tight text-slate-950">
+          {isLoading ? "..." : value}
+        </p>
+
+        <p className="text-xs font-bold text-slate-400 transition group-hover:text-blue-600">
+          Open →
+        </p>
+      </div>
     </Link>
   );
 }
 
-function formatDate(value: string | null) {
-  if (!value) return "-";
+function getTodayDateString() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
 
-  return new Intl.DateTimeFormat("en-CA", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
+  return `${year}-${month}-${day}`;
+}
+
+function getDateRange(dateString: string) {
+  const start = new Date(`${dateString}T00:00:00`);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+
+  return {
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+  };
+}
+
+function minutesToTime(totalMinutes: number) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+    2,
+    "0"
+  )}`;
+}
+
+function getLocalMinutesFromIso(value: string) {
+  const date = new Date(value);
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function formatAppointmentTime(startTime: string, endTime: string) {
+  const start = new Date(startTime);
+  const end = new Date(endTime);
+
+  const startLabel = start.toLocaleTimeString("en-CA", {
+    hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+    hour12: false,
+  });
+
+  const endLabel = end.toLocaleTimeString("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  return `${startLabel} - ${endLabel}`;
+}
+
+function formatTodayLabel() {
+  return new Intl.DateTimeFormat("en-CA", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(new Date());
+}
+
+function buildTimeSlots() {
+  const slots: number[] = [];
+
+  for (
+    let current = DAY_START_MINUTES;
+    current < DAY_END_MINUTES;
+    current += SLOT_MINUTES
+  ) {
+    slots.push(current);
+  }
+
+  return slots;
+}
+
+function getScheduleCellInfo({
+  doctorId,
+  slotStartMinutes,
+  appointments,
+}: {
+  doctorId: string;
+  slotStartMinutes: number;
+  appointments: TodayAppointment[];
+}): ScheduleCellInfo {
+  const slotEndMinutes = slotStartMinutes + SLOT_MINUTES;
+
+  const appointment =
+    appointments.find((item) => {
+      if (item.doctor_id !== doctorId) return false;
+
+      const appointmentStart = getLocalMinutesFromIso(item.start_time);
+      const appointmentEnd = getLocalMinutesFromIso(item.end_time);
+
+      return (
+        appointmentStart < slotEndMinutes && appointmentEnd > slotStartMinutes
+      );
+    }) || null;
+
+  if (!appointment) {
+    return {
+      appointment: null,
+      isStart: false,
+    };
+  }
+
+  const appointmentStart = getLocalMinutesFromIso(appointment.start_time);
+
+  return {
+    appointment,
+    isStart:
+      appointmentStart >= slotStartMinutes && appointmentStart < slotEndMinutes,
+  };
+}
+
+function getDoctorAppointmentCount({
+  doctorId,
+  appointments,
+}: {
+  doctorId: string;
+  appointments: TodayAppointment[];
+}) {
+  return appointments.filter((appointment) => appointment.doctor_id === doctorId)
+    .length;
 }
 
 export default function DashboardPage() {
@@ -74,7 +228,13 @@ export default function DashboardPage() {
     incompleteCalls: 0,
   });
 
-  const [latestRequests, setLatestRequests] = useState<AppointmentRequest[]>([]);
+  const [doctors, setDoctors] = useState<ClinicDoctor[]>([]);
+  const [todayAppointments, setTodayAppointments] = useState<
+    TodayAppointment[]
+  >([]);
+
+  const timeSlots = useMemo(() => buildTimeSlots(), []);
+  const todayDate = getTodayDateString();
 
   useEffect(() => {
     async function loadDashboard() {
@@ -84,11 +244,15 @@ export default function DashboardPage() {
       setErrorMessage("");
       setIsLoadingStats(true);
 
+      const { startIso, endIso } = getDateRange(todayDate);
+
       const [
         newRequestsResult,
         needsFollowupResult,
         slotOfferedResult,
-        latestRequestsResult,
+        todaysAppointmentsResult,
+        todayAppointmentsResult,
+        incompleteCallsCount,
       ] = await Promise.all([
         supabase
           .from("appointment_requests")
@@ -109,39 +273,75 @@ export default function DashboardPage() {
           .eq("status", "slot_offered"),
 
         supabase
-          .from("appointment_requests")
+          .from("appointments")
+          .select("id", { count: "exact", head: true })
+          .eq("clinic_id", clinicId)
+          .eq("status", "confirmed")
+          .gte("start_time", startIso)
+          .lt("start_time", endIso),
+
+        supabase
+          .from("appointments")
           .select(
-            "id, patient_name, doctor_id, service_category_id, status, created_at"
+            `
+            id,
+            clinic_id,
+            patient_name,
+            patient_phone,
+            doctor_id,
+            service_name,
+            start_time,
+            end_time,
+            duration_minutes,
+            notes
+          `
           )
           .eq("clinic_id", clinicId)
-          .order("created_at", { ascending: false })
-          .limit(5),
+          .eq("status", "confirmed")
+          .gte("start_time", startIso)
+          .lt("start_time", endIso)
+          .order("start_time", { ascending: true }),
+
+        getIncompleteCallExtractionCount(clinicId),
       ]);
 
       if (newRequestsResult.error) {
-        console.error("New requests count error:", newRequestsResult.error);
         setErrorMessage(newRequestsResult.error.message);
         setIsLoadingStats(false);
         return;
       }
 
       if (needsFollowupResult.error) {
-        console.error("Needs follow-up count error:", needsFollowupResult.error);
         setErrorMessage(needsFollowupResult.error.message);
         setIsLoadingStats(false);
         return;
       }
 
       if (slotOfferedResult.error) {
-        console.error("Slot offered count error:", slotOfferedResult.error);
         setErrorMessage(slotOfferedResult.error.message);
         setIsLoadingStats(false);
         return;
       }
 
-      if (latestRequestsResult.error) {
-        console.error("Latest requests error:", latestRequestsResult.error);
-        setErrorMessage(latestRequestsResult.error.message);
+      if (todaysAppointmentsResult.error) {
+        setErrorMessage(todaysAppointmentsResult.error.message);
+        setIsLoadingStats(false);
+        return;
+      }
+
+      if (todayAppointmentsResult.error) {
+        setErrorMessage(todayAppointmentsResult.error.message);
+        setIsLoadingStats(false);
+        return;
+      }
+
+      try {
+        const loadedDoctors = await getClinicDoctors(clinicId);
+        setDoctors(loadedDoctors);
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to load doctors."
+        );
         setIsLoadingStats(false);
         return;
       }
@@ -150,23 +350,21 @@ export default function DashboardPage() {
         newRequests: newRequestsResult.count || 0,
         needsFollowup: needsFollowupResult.count || 0,
         slotOffered: slotOfferedResult.count || 0,
-        todaysAppointments: 0,
-        incompleteCalls: 0,
+        todaysAppointments: todaysAppointmentsResult.count || 0,
+        incompleteCalls: incompleteCallsCount,
       });
 
-      setLatestRequests(latestRequestsResult.data || []);
+      setTodayAppointments(todayAppointmentsResult.data || []);
       setIsLoadingStats(false);
     }
 
     loadDashboard();
-  }, [clinicId, isLoadingClinic]);
+  }, [clinicId, isLoadingClinic, todayDate]);
 
   if (isLoadingClinic) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50">
-        <p className="text-sm font-medium text-slate-500">
-          Loading clinic...
-        </p>
+        <p className="text-sm font-medium text-slate-500">Loading clinic...</p>
       </main>
     );
   }
@@ -177,19 +375,18 @@ export default function DashboardPage() {
       description="Monitor AI calls, appointment requests, doctors, and clinic activity."
     >
       {errorMessage && (
-        <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
           {errorMessage}
         </div>
       )}
 
-
-
-      <div className="flex w-full flex-nowrap gap-4">
+      <div className="flex w-full flex-nowrap gap-4 overflow-x-auto pb-2">
         <StatCard
           title="New Requests"
           value={stats.newRequests}
           href="/dashboard/requests?status=new"
           isLoading={isLoadingStats}
+          tone="blue"
         />
 
         <StatCard
@@ -197,6 +394,7 @@ export default function DashboardPage() {
           value={stats.needsFollowup}
           href="/dashboard/requests?status=needs_followup"
           isLoading={isLoadingStats}
+          tone="amber"
         />
 
         <StatCard
@@ -204,217 +402,186 @@ export default function DashboardPage() {
           value={stats.slotOffered}
           href="/dashboard/requests?status=slot_offered"
           isLoading={isLoadingStats}
+          tone="violet"
         />
 
         <StatCard
           title="Today's Appointments"
           value={stats.todaysAppointments}
-          href="/dashboard/appointments?date=today"
+          href="/dashboard/appointments"
           isLoading={isLoadingStats}
+          tone="emerald"
         />
 
         <StatCard
           title="Incomplete Calls"
           value={stats.incompleteCalls}
-          href="/dashboard/calls?status=incomplete"
+          href="/dashboard/calls?filter=incomplete"
           isLoading={isLoadingStats}
+          tone="rose"
         />
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
+      <section className="mt-6 overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm ring-1 ring-slate-100">
+        <div className="border-b border-slate-100 bg-gradient-to-r from-blue-50 via-white to-emerald-50 px-6 py-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h2 className="text-lg font-bold text-slate-900">
-                Action Required
-              </h2>
-              <p className="mt-2 text-sm text-slate-500">
-                Items that need human review or receptionist follow-up.
+              <div className="flex flex-wrap items-center gap-3">
+                <h2 className="text-xl font-black tracking-tight text-slate-950">
+                  Today&apos;s Doctor Schedule
+                </h2>
+
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-800 ring-1 ring-emerald-200">
+                  {stats.todaysAppointments} confirmed
+                </span>
+              </div>
+
+              <p className="mt-2 text-sm font-medium text-slate-500">
+                {formatTodayLabel()} · 30-minute timeline · 8:00 to 18:00
               </p>
             </div>
 
-            <Link
-              href="/dashboard/requests?status=needs_followup"
-              className="text-sm font-semibold text-blue-600 hover:text-blue-700"
+            <div className="flex items-center gap-3">
+              <Link
+                href="/dashboard/appointments"
+                className="rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-blue-700"
+              >
+                Open appointments
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {isLoadingStats && (
+          <div className="p-6">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-10 text-center text-sm font-semibold text-slate-500">
+              Loading today&apos;s schedule...
+            </div>
+          </div>
+        )}
+
+        {!isLoadingStats && doctors.length === 0 && (
+          <div className="p-6">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-10 text-center text-sm font-medium text-slate-500">
+              No doctors found. Add doctors first to show today&apos;s schedule.
+            </div>
+          </div>
+        )}
+
+        {!isLoadingStats && doctors.length > 0 && (
+          <div className="overflow-x-auto bg-white">
+            <div
+              className="w-max min-w-full"
+              style={{
+                display: "grid",
+                gridTemplateColumns: `64px repeat(${doctors.length}, 150px)`,
+              }}
             >
-              View all
-            </Link>
-          </div>
+              <div className="sticky left-0 z-30 border-b border-r border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-black uppercase tracking-wide text-slate-500">
+                Time
+              </div>
 
-          <div className="mt-5 space-y-3">
-            <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">
-              Patients who asked for a specific time but no matching slot was
-              found.
-            </div>
+              {doctors.map((doctor) => {
+                const count = getDoctorAppointmentCount({
+                  doctorId: doctor.id,
+                  appointments: todayAppointments,
+                });
 
-            <div className="rounded-xl bg-red-50 p-4 text-sm text-red-900">
-              Calls with missing name, phone number, doctor, or service.
-            </div>
+                return (
+                  <div
+                    key={doctor.id}
+                    className="border-b border-r border-slate-200 bg-slate-50/80 px-3 py-2 last:border-r-0"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-black text-slate-900">
+                        {doctor.display_name || doctor.full_name}
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-slate-400">
+                        {count} appointment{count === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
 
-            <div className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900">
-              Patients who received a slot but have not confirmed yet.
-            </div>
-          </div>
-        </section>
+              {timeSlots.map((slotMinutes) => (
+                <div key={`row-${slotMinutes}`} className="contents">
+                  <div className="sticky left-0 z-20 border-b border-r border-slate-200 bg-slate-50 px-3 py-2">
+                    <p className="text-xs font-black text-slate-500">
+                      {minutesToTime(slotMinutes)}
+                    </p>
+                  </div>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">
-                Today&apos;s Calendar
-              </h2>
-              <p className="mt-2 text-sm text-slate-500">
-                Confirmed appointments and available doctor slots for today.
-              </p>
-            </div>
+                  {doctors.map((doctor) => {
+                    const cellInfo = getScheduleCellInfo({
+                      doctorId: doctor.id,
+                      slotStartMinutes: slotMinutes,
+                      appointments: todayAppointments,
+                    });
 
-            <Link
-              href="/dashboard/calendar"
-              className="text-sm font-semibold text-blue-600 hover:text-blue-700"
-            >
-              Open calendar
-            </Link>
-          </div>
+                    const appointment = cellInfo.appointment;
 
-          <div className="mt-5 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
-            Today&apos;s confirmed appointments will appear here after the
-            appointments table or calendar integration is connected.
-          </div>
-        </section>
-      </div>
+                    if (!appointment) {
+                      return (
+                        <div
+                          key={`${doctor.id}-${slotMinutes}`}
+                          className="group min-h-[46px] border-b border-r border-slate-100 bg-white p-1.5 last:border-r-0"
+                        >
+                          <div className="h-full rounded-xl border border-dashed border-slate-200 bg-slate-50/60 transition group-hover:border-slate-300" />
+                        </div>
+                      );
+                    }
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">
-                Latest Appointment Requests
-              </h2>
-              <p className="mt-2 text-sm text-slate-500">
-                Recent appointment requests created by the AI receptionist.
-              </p>
-            </div>
+                    if (!cellInfo.isStart) {
+                      return (
+                        <div
+                          key={`${doctor.id}-${slotMinutes}`}
+                          className="min-h-[46px] border-b border-r border-blue-100 bg-blue-50/30 p-1.5 last:border-r-0"
+                        >
+                          <div className="h-full rounded-xl border border-blue-100 bg-blue-100/50" />
+                        </div>
+                      );
+                    }
 
-            <Link
-              href="/dashboard/requests"
-              className="text-sm font-semibold text-blue-600 hover:text-blue-700"
-            >
-              View requests
-            </Link>
-          </div>
-
-          <div className="mt-5 overflow-hidden rounded-xl border border-slate-100">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-slate-500">
-                <tr>
-                  <th className="px-4 py-3 font-semibold">Patient</th>
-                  <th className="px-4 py-3 font-semibold">Service</th>
-                  <th className="px-4 py-3 font-semibold">Doctor</th>
-                  <th className="px-4 py-3 font-semibold">Status</th>
-                  <th className="px-4 py-3 font-semibold">Created</th>
-                  <th className="px-4 py-3 font-semibold"></th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {latestRequests.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={6}
-                      className="px-4 py-6 text-center text-sm text-slate-500"
-                    >
-                      No appointment requests yet.
-                    </td>
-                  </tr>
-                )}
-
-                {latestRequests.map((request) => (
-                  <tr key={request.id}>
-                    <td className="px-4 py-4 font-medium text-slate-900">
-                      {request.patient_name || "Unknown patient"}
-                    </td>
-
-                    <td className="px-4 py-4 text-slate-600">
-                      {request.service_name ||
-                        request.service_category_id ||
-                        "-"}
-                    </td>
-
-                    <td className="px-4 py-4 text-slate-600">
-                      {request.doctor_name || request.doctor_id || "Any doctor"}
-                    </td>
-
-                    <td className="px-4 py-4">
-                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                        {request.status || "-"}
-                      </span>
-                    </td>
-
-                    <td className="px-4 py-4 text-slate-500">
-                      {formatDate(request.created_at)}
-                    </td>
-
-                    <td className="px-4 py-4 text-right">
+                    return (
                       <Link
-                        href={`/dashboard/requests/${request.id}`}
-                        className="font-semibold text-blue-600 hover:text-blue-700"
+                        key={`${doctor.id}-${slotMinutes}`}
+                        href="/dashboard/appointments"
+                        className="min-h-[46px] border-b border-r border-blue-100 bg-blue-50/80 p-1.5 transition hover:bg-blue-100 last:border-r-0"
                       >
-                        View
+                        <div className="rounded-xl border border-blue-200 bg-gradient-to-br from-white to-blue-50 p-2 shadow-sm ring-1 ring-blue-100">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-black text-slate-950">
+                                {appointment.patient_name || "Unknown patient"}
+                              </p>
+
+                              <p className="mt-0.5 truncate text-[11px] font-bold text-blue-700">
+                                {appointment.service_name || "Appointment"}
+                              </p>
+                            </div>
+
+                            <span className="rounded-full bg-blue-600 px-1.5 py-0.5 text-[9px] font-black text-white shadow-sm">
+                              {appointment.duration_minutes}m
+                            </span>
+                          </div>
+
+                          <p className="mt-1 text-[11px] font-semibold text-slate-500">
+                            {formatAppointmentTime(
+                              appointment.start_time,
+                              appointment.end_time
+                            )}
+                          </p>
+                        </div>
                       </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-lg font-bold text-slate-900">
-            AI Activity Today
-          </h2>
-          <p className="mt-2 text-sm text-slate-500">
-            Summary of what the AI receptionist handled today.
-          </p>
-
-          <div className="mt-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-500">Calls handled</span>
-              <span className="font-bold text-slate-900">0</span>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-500">Requests collected</span>
-              <span className="font-bold text-slate-900">
-                {isLoadingStats ? "..." : stats.newRequests}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-500">
-                Appointments booked
-              </span>
-              <span className="font-bold text-slate-900">
-                {isLoadingStats ? "..." : stats.todaysAppointments}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-500">Human help needed</span>
-              <span className="font-bold text-slate-900">
-                {isLoadingStats ? "..." : stats.needsFollowup}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-500">Incomplete calls</span>
-              <span className="font-bold text-slate-900">
-                {isLoadingStats ? "..." : stats.incompleteCalls}
-              </span>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           </div>
-        </section>
-      </div>
+        )}
+      </section>
     </DashboardShell>
   );
 }

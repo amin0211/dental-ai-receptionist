@@ -519,27 +519,26 @@ def match_doctor_from_name(
     print(f"No doctor matched preferred_doctor_name={preferred_doctor_name}")
     return None
 
-
-def get_doctor_recurring_availability(
+def get_calendar_availability_rules_for_doctor(
     clinic_id: str | None,
     doctor_id: str | None,
     start_date: date,
     end_date: date,
 ) -> list[dict]:
     if not supabase or not clinic_id or not doctor_id:
-        print("Cannot load recurring availability: missing supabase, clinic_id, or doctor_id")
+        print("Cannot load availability rules: missing supabase, clinic_id, or doctor_id")
         return []
 
     try:
         result = (
-            supabase.table("doctor_recurring_availability")
+            supabase.table("calendar_availability_rules")
             .select("*")
             .eq("clinic_id", clinic_id)
             .eq("doctor_id", doctor_id)
             .eq("is_active", True)
-            .or_(f"effective_from.is.null,effective_from.lte.{end_date.isoformat()}")
-            .or_(f"effective_until.is.null,effective_until.gte.{start_date.isoformat()}")
-            .order("day_of_week")
+            .lte("start_date", end_date.isoformat())
+            .or_(f"end_date.is.null,end_date.gte.{start_date.isoformat()}")
+            .order("start_date")
             .order("start_time")
             .execute()
         )
@@ -547,78 +546,120 @@ def get_doctor_recurring_availability(
         rows = result.data or []
 
         print(
-            f"Loaded recurring availability for doctor={doctor_id}, "
+            f"Loaded availability rules for doctor={doctor_id}, "
             f"range={start_date} to {end_date}: {rows}"
         )
 
         return rows
 
     except Exception as e:
-        print(f"Error loading recurring availability: {e}")
+        print(f"Error loading availability rules: {e}")
         return []
-    
-def get_doctor_calendar_events(
+
+
+def get_calendar_availability_exceptions_for_rules(
     clinic_id: str | None,
-    doctor_id: str | None,
-    start_dt: datetime,
-    end_dt: datetime,
+    rule_ids: list[str],
+    start_date: date,
+    end_date: date,
 ) -> list[dict]:
-    if not supabase or not clinic_id or not doctor_id:
-        print("Cannot load calendar events: missing supabase, clinic_id, or doctor_id")
+    if not supabase or not clinic_id or not rule_ids:
         return []
 
     try:
         result = (
-            supabase.table("doctor_calendar_events")
+            supabase.table("calendar_availability_exceptions")
             .select("*")
             .eq("clinic_id", clinic_id)
-            .eq("doctor_id", doctor_id)
-            .in_("status", ["active", "pending", "confirmed"])
-            .lt("starts_at", iso_datetime_for_supabase(end_dt))
-            .gt("ends_at", iso_datetime_for_supabase(start_dt))
-            .order("starts_at")
+            .in_("rule_id", rule_ids)
+            .gte("exception_date", start_date.isoformat())
+            .lte("exception_date", end_date.isoformat())
             .execute()
         )
 
         rows = result.data or []
 
         print(
-            f"Loaded calendar events for doctor={doctor_id}, "
-            f"range={start_dt} to {end_dt}: {rows}"
+            f"Loaded availability exceptions for rules={rule_ids}, "
+            f"range={start_date} to {end_date}: {rows}"
         )
 
         return rows
 
     except Exception as e:
-        print(f"Error loading calendar events: {e}")
+        print(f"Error loading availability exceptions: {e}")
         return []
-    
-def get_daily_available_intervals_from_recurring(
-    recurring_rows: list[dict],
+
+
+def rule_applies_to_date(rule: dict, target_date: date) -> bool:
+    start_date_raw = rule.get("start_date")
+    end_date_raw = rule.get("end_date")
+
+    if not start_date_raw:
+        return False
+
+    rule_start = date.fromisoformat(str(start_date_raw))
+
+    if target_date < rule_start:
+        return False
+
+    if end_date_raw:
+        rule_end = date.fromisoformat(str(end_date_raw))
+        if target_date > rule_end:
+            return False
+
+    repeat_type = rule.get("repeat_type") or "none"
+    db_day = python_day_to_db_day(target_date)
+
+    if repeat_type == "none":
+        return target_date == rule_start
+
+    if repeat_type == "daily":
+        return True
+
+    if repeat_type == "weekdays":
+        return target_date.weekday() <= 4
+
+    if repeat_type in ["weekly", "custom"]:
+        return rule.get("day_of_week") == db_day
+
+    return False
+
+
+def get_daily_available_intervals_from_rules(
+    rules: list[dict],
+    exceptions: list[dict],
     target_date: date,
     timezone_name: str = "America/Vancouver",
 ) -> list[tuple[datetime, datetime]]:
-    db_day = python_day_to_db_day(target_date)
     intervals = []
 
-    for row in recurring_rows:
-        if row.get("day_of_week") != db_day:
+    exception_by_rule_id: dict[str, dict] = {}
+
+    for exception in exceptions:
+        if str(exception.get("exception_date")) != target_date.isoformat():
             continue
 
-        if row.get("availability_type") != "available":
+        rule_id = exception.get("rule_id")
+        if rule_id:
+            exception_by_rule_id[rule_id] = exception
+
+    for rule in rules:
+        if not rule_applies_to_date(rule, target_date):
             continue
 
-        effective_from = row.get("effective_from")
-        effective_until = row.get("effective_until")
+        rule_id = rule.get("id")
+        exception = exception_by_rule_id.get(rule_id)
 
-        if effective_from and target_date < date.fromisoformat(str(effective_from)):
+        if exception and exception.get("exception_type") == "cancelled":
             continue
 
-        if effective_until and target_date > date.fromisoformat(str(effective_until)):
-            continue
-
-        start_time = parse_db_time(row.get("start_time"))
-        end_time = parse_db_time(row.get("end_time"))
+        if exception and exception.get("exception_type") == "modified":
+            start_time = parse_db_time(exception.get("start_time"))
+            end_time = parse_db_time(exception.get("end_time"))
+        else:
+            start_time = parse_db_time(rule.get("start_time"))
+            end_time = parse_db_time(rule.get("end_time"))
 
         if not start_time or not end_time:
             continue
@@ -630,6 +671,45 @@ def get_daily_available_intervals_from_recurring(
             intervals.append((start_dt, end_dt))
 
     return intervals
+
+
+def get_doctor_busy_appointments(
+    clinic_id: str | None,
+    doctor_id: str | None,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> list[dict]:
+    if not supabase or not clinic_id or not doctor_id:
+        print("Cannot load busy appointments: missing supabase, clinic_id, or doctor_id")
+        return []
+
+    try:
+        result = (
+            supabase.table("appointments")
+            .select("id, clinic_id, doctor_id, start_time, end_time, status")
+            .eq("clinic_id", clinic_id)
+            .eq("doctor_id", doctor_id)
+            .in_("status", ["confirmed"])
+            .lt("start_time", iso_datetime_for_supabase(end_dt))
+            .gt("end_time", iso_datetime_for_supabase(start_dt))
+            .order("start_time")
+            .execute()
+        )
+
+        rows = result.data or []
+
+        print(
+            f"Loaded busy appointments for doctor={doctor_id}, "
+            f"range={start_dt} to {end_dt}: {rows}"
+        )
+
+        return rows
+
+    except Exception as e:
+        print(f"Error loading busy appointments: {e}")
+        return []
+
+
 
 def subtract_busy_intervals(
     available_intervals: list[tuple[datetime, datetime]],
@@ -716,14 +796,29 @@ def find_next_available_slots_for_doctor(
         tzinfo=tz,
     )
 
-    recurring_rows = get_doctor_recurring_availability(
+    rules = get_calendar_availability_rules_for_doctor(
         clinic_id=clinic_id,
         doctor_id=doctor_id,
         start_date=search_start_date,
         end_date=search_end_date,
     )
 
-    events = get_doctor_calendar_events(
+    if not rules:
+        print(f"No availability rules found for doctor={doctor_id}")
+        return []
+
+    exceptions = get_calendar_availability_exceptions_for_rules(
+        clinic_id=clinic_id,
+        rule_ids=[
+            row.get("id")
+            for row in rules
+            if row.get("id")
+        ],
+        start_date=search_start_date,
+        end_date=search_end_date,
+    )
+
+    busy_appointments = get_doctor_busy_appointments(
         clinic_id=clinic_id,
         doctor_id=doctor_id,
         start_dt=search_start_dt,
@@ -735,8 +830,9 @@ def find_next_available_slots_for_doctor(
     current_date = search_start_date
 
     while current_date <= search_end_date and len(found_slots) < max_slots:
-        available_intervals = get_daily_available_intervals_from_recurring(
-            recurring_rows=recurring_rows,
+        available_intervals = get_daily_available_intervals_from_rules(
+            rules=rules,
+            exceptions=exceptions,
             target_date=current_date,
             timezone_name=timezone_name,
         )
@@ -750,31 +846,22 @@ def find_next_available_slots_for_doctor(
 
         busy_intervals = []
 
-        for event in events:
-            event_type = event.get("event_type")
-            status = event.get("status")
-
-            if event_type not in ["appointment", "break", "leave", "unavailable"]:
-                continue
-
-            if status not in ["active", "pending", "confirmed"]:
-                continue
-
+        for appointment in busy_appointments:
             try:
-                event_start = datetime.fromisoformat(
-                    str(event.get("starts_at")).replace("Z", "+00:00")
+                appointment_start = datetime.fromisoformat(
+                    str(appointment.get("start_time")).replace("Z", "+00:00")
                 ).astimezone(tz)
 
-                event_end = datetime.fromisoformat(
-                    str(event.get("ends_at")).replace("Z", "+00:00")
+                appointment_end = datetime.fromisoformat(
+                    str(appointment.get("end_time")).replace("Z", "+00:00")
                 ).astimezone(tz)
             except Exception:
                 continue
 
-            if event_end <= day_start or event_start >= day_end:
+            if appointment_end <= day_start or appointment_start >= day_end:
                 continue
 
-            busy_intervals.append((event_start, event_end))
+            busy_intervals.append((appointment_start, appointment_end))
 
         free_intervals = subtract_busy_intervals(
             available_intervals=available_intervals,
@@ -820,6 +907,7 @@ def find_next_available_slots_for_doctor(
 
     return found_slots
 
+
 def format_slot_for_ai(slot_start: datetime, slot_end: datetime) -> str:
     day_name = slot_start.strftime("%A")
     month_name = slot_start.strftime("%B")
@@ -829,30 +917,6 @@ def format_slot_for_ai(slot_start: datetime, slot_end: datetime) -> str:
     end_display = slot_end.strftime("%I:%M %p").lstrip("0")
 
     return f"{day_name}, {month_name} {day_number} from {start_display} to {end_display}"
-
-# def get_first_two_slot_suggestions(
-#     clinic_id: str | None,
-#     doctor_id: str | None,
-#     duration_minutes: int | None = None,
-#     timezone_name: str = "America/Vancouver",
-# ) -> dict:
-#     duration = duration_minutes or 30
-
-#     slots = find_next_available_slots_for_doctor(
-#         clinic_id=clinic_id,
-#         doctor_id=doctor_id,
-#         duration_minutes=duration,
-#         timezone_name=timezone_name,
-#         days_ahead=60,
-#         max_slots=2,
-#         step_minutes=15,
-#     )
-
-#     return {
-#         "has_slots": bool(slots),
-#         "slots": slots,
-#         "duration_minutes": duration,
-#     }
 
 
 
@@ -968,31 +1032,6 @@ def get_service_category_doctor_ids(
         return []
 
 
-def doctor_provides_service(
-    clinic_id: str | None,
-    doctor_id: str | None,
-    service_category_id: str | None,
-) -> bool:
-    if not supabase or not clinic_id or not doctor_id or not service_category_id:
-        return False
-
-    try:
-        result = (
-            supabase.table("clinic_doctor_services")
-            .select("id")
-            .eq("clinic_id", clinic_id)
-            .eq("doctor_id", doctor_id)
-            .eq("service_category_id", service_category_id)
-            .eq("is_active", True)
-            .limit(1)
-            .execute()
-        )
-
-        return bool(result.data)
-
-    except Exception as e:
-        print(f"Error checking doctor service: {e}")
-        return False
 
 
 def get_doctor_display_name(doctor: dict | None) -> str | None:

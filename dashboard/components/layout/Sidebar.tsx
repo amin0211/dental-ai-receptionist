@@ -9,6 +9,10 @@ const navigationItems = [
     href: "/dashboard",
   },
   {
+    label: "appointments",
+    href: "/dashboard/appointments",
+  },
+  {
     label: "Requests",
     href: "/dashboard/requests",
   },
@@ -38,7 +42,7 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden min-h-screen w-64 shrink-0 border-r border-slate-200 bg-white px-4 py-6 lg:block">
+    <aside className="hidden min-h-screen w-54 shrink-0 border-r border-slate-200 bg-white px-4 py-6 lg:block">
       <div className="mb-8 px-2">
         <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-lg font-bold text-white">
           AI

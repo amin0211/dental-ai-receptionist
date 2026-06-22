@@ -934,3 +934,397 @@ export async function getClinicByOwnerUserId(ownerUserId: string) {
 
   return data as Clinic;
 }
+
+export type CallExtraction = {
+  id: string;
+  clinic_id: string | null;
+  call_id: string | null;
+  raw_transcript: string | null;
+  cleaned_transcript: string | null;
+  detected_language: string | null;
+  patient_name: string | null;
+  patient_phone: string | null;
+  service_category: string | null;
+  canonical_reason: string | null;
+  preferred_time_raw: string | null;
+  preferred_datetime: string | null;
+  urgency: string | null;
+  confidence: number | null;
+  extraction_notes: string | null;
+  created_at: string | null;
+  preferred_date_raw: string | null;
+  preferred_date_confirmed: boolean | null;
+  preferred_time_confirmed: boolean | null;
+  doctor_id: string | null;
+  preferred_doctor_name: string | null;
+  extraction_status: string | null;
+  missing_fields: string[] | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  converted_to_request: boolean | null;
+  appointment_request_id: string | null;
+};
+
+export type UpdateCallExtractionReviewInput = {
+  id: string;
+  clinicId: string;
+  patientName: string | null;
+  patientPhone: string | null;
+  serviceCategory: string | null;
+  canonicalReason: string | null;
+  preferredDateRaw: string | null;
+  preferredTimeRaw: string | null;
+  preferredDatetime: string | null;
+  urgency: string | null;
+  doctorId: string | null;
+  preferredDoctorName: string | null;
+  preferredDateConfirmed: boolean;
+  preferredTimeConfirmed: boolean;
+  extractionStatus: string;
+  missingFields: string[];
+  extractionNotes: string | null;
+  reviewedBy: string | null;
+};
+
+export async function getCallExtractions({
+  clinicId,
+  filter,
+}: {
+  clinicId: string;
+  filter?: string | null;
+}) {
+  let query = supabase
+    .from("call_extractions")
+    .select(
+      `
+      id,
+      clinic_id,
+      call_id,
+      raw_transcript,
+      cleaned_transcript,
+      detected_language,
+      patient_name,
+      patient_phone,
+      service_category,
+      canonical_reason,
+      preferred_time_raw,
+      preferred_datetime,
+      urgency,
+      confidence,
+      extraction_notes,
+      created_at,
+      preferred_date_raw,
+      preferred_date_confirmed,
+      preferred_time_confirmed,
+      doctor_id,
+      preferred_doctor_name,
+      extraction_status,
+      missing_fields,
+      reviewed_by,
+      reviewed_at,
+      converted_to_request,
+      appointment_request_id
+    `
+    )
+    .eq("clinic_id", clinicId)
+    .order("created_at", { ascending: false });
+
+  if (filter === "incomplete") {
+    query = query.or(
+      "extraction_status.eq.incomplete,patient_name.is.null,canonical_reason.is.null,preferred_date_raw.is.null,preferred_time_raw.is.null"
+    );
+  }
+
+  if (filter === "needs_review") {
+    query = query.eq("extraction_status", "needs_review");
+  }
+
+  if (filter === "low_confidence") {
+    query = query.lt("confidence", 0.6);
+  }
+
+  if (filter === "converted") {
+    query = query.eq("converted_to_request", true);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data || []) as CallExtraction[];
+}
+
+
+export async function getCallExtractionById({
+  id,
+  clinicId,
+}: {
+  id: string;
+  clinicId: string;
+}) {
+  const { data, error } = await supabase
+    .from("call_extractions")
+    .select(
+      `
+      id,
+      clinic_id,
+      call_id,
+      raw_transcript,
+      cleaned_transcript,
+      detected_language,
+      patient_name,
+      patient_phone,
+      service_category,
+      canonical_reason,
+      preferred_time_raw,
+      preferred_datetime,
+      urgency,
+      confidence,
+      extraction_notes,
+      created_at,
+      preferred_date_raw,
+      preferred_date_confirmed,
+      preferred_time_confirmed,
+      doctor_id,
+      preferred_doctor_name,
+      extraction_status,
+      missing_fields,
+      reviewed_by,
+      reviewed_at,
+      converted_to_request,
+      appointment_request_id
+    `
+    )
+    .eq("id", id)
+    .eq("clinic_id", clinicId)
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as CallExtraction;
+}
+
+export async function updateCallExtractionReview(
+  input: UpdateCallExtractionReviewInput
+) {
+  const { error } = await supabase
+    .from("call_extractions")
+    .update({
+      patient_name: input.patientName,
+      patient_phone: input.patientPhone,
+      service_category: input.serviceCategory,
+      canonical_reason: input.canonicalReason,
+      preferred_date_raw: input.preferredDateRaw,
+      preferred_time_raw: input.preferredTimeRaw,
+      preferred_datetime: input.preferredDatetime,
+      urgency: input.urgency,
+      doctor_id: input.doctorId,
+      preferred_doctor_name: input.preferredDoctorName,
+      preferred_date_confirmed: input.preferredDateConfirmed,
+      preferred_time_confirmed: input.preferredTimeConfirmed,
+      extraction_status: input.extractionStatus,
+      missing_fields: input.missingFields,
+      extraction_notes: input.extractionNotes,
+      reviewed_by: input.reviewedBy,
+      reviewed_at: new Date().toISOString(),
+    })
+    .eq("id", input.id)
+    .eq("clinic_id", input.clinicId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function getIncompleteCallExtractionCount(clinicId: string) {
+  const { count, error } = await supabase
+    .from("call_extractions")
+    .select("id", { count: "exact", head: true })
+    .eq("clinic_id", clinicId)
+    .or(
+      "extraction_status.eq.incomplete,patient_name.is.null,canonical_reason.is.null,preferred_date_raw.is.null,preferred_time_raw.is.null"
+    );
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return count || 0;
+}
+
+export type Appointment = {
+  id: string;
+  clinic_id: string;
+  appointment_request_id: string | null;
+  patient_name: string | null;
+  patient_phone: string | null;
+  doctor_id: string | null;
+  service_category_id: string | null;
+  service_name: string | null;
+  start_time: string;
+  end_time: string;
+  duration_minutes: number;
+  status: string;
+  source: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateAppointmentFromRequestInput = {
+  clinicId: string;
+  appointmentRequestId: string;
+  patientName: string | null;
+  patientPhone: string | null;
+  doctorId: string;
+  serviceCategoryId: string | null;
+  serviceName: string | null;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  notes: string | null;
+    reason: string | null;
+    urgency: string | null;  
+};
+
+export async function getDoctorAppointmentsForRange({
+  clinicId,
+  doctorId,
+  rangeStart,
+  rangeEnd,
+}: {
+  clinicId: string;
+  doctorId: string;
+  rangeStart: string;
+  rangeEnd: string;
+}) {
+  const { data, error } = await supabase
+    .from("appointments")
+    .select(
+      `
+      id,
+      clinic_id,
+      appointment_request_id,
+      patient_name,
+      patient_phone,
+      doctor_id,
+      service_category_id,
+      service_name,
+      start_time,
+      end_time,
+      duration_minutes,
+      status,
+      source,
+      notes,
+      created_at,
+      updated_at
+    `
+    )
+    .eq("clinic_id", clinicId)
+    .eq("doctor_id", doctorId)
+    .in("status", ["confirmed"])
+    .lt("start_time", rangeEnd)
+    .gt("end_time", rangeStart)
+    .order("start_time", { ascending: true });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data || []) as Appointment[];
+}
+
+export async function createAppointmentFromRequest(
+  input: CreateAppointmentFromRequestInput
+) {
+  const { data: appointment, error: appointmentError } = await supabase
+    .from("appointments")
+    .insert({
+      clinic_id: input.clinicId,
+      appointment_request_id: input.appointmentRequestId,
+      patient_name: input.patientName,
+      patient_phone: input.patientPhone,
+      doctor_id: input.doctorId,
+      service_category_id: input.serviceCategoryId,
+      service_name: input.serviceName,
+      start_time: input.startTime,
+      end_time: input.endTime,
+      duration_minutes: input.durationMinutes,
+      status: "confirmed",
+      source: "ai_request",
+      notes: input.notes,
+        reason: input.reason,
+        urgency: input.urgency,
+    })
+    .select("id")
+    .single();
+
+  if (appointmentError) {
+    throw new Error(appointmentError.message);
+  }
+
+  const { error: requestError } = await supabase
+    .from("appointment_requests")
+    .update({
+      status: "confirmed",
+      confirmed_appointment_id: appointment.id,
+    })
+    .eq("id", input.appointmentRequestId)
+    .eq("clinic_id", input.clinicId);
+
+  if (requestError) {
+    await supabase.from("appointments").delete().eq("id", appointment.id);
+    throw new Error(requestError.message);
+  }
+
+  return appointment;
+}
+
+export type UpdateAppointmentInput = {
+  clinicId: string;
+  appointmentId: string;
+  patientName: string | null;
+  patientPhone: string | null;
+  doctorId: string;
+  serviceCategoryId: string;
+  serviceName: string | null;
+  reason: string | null;
+  urgency: string | null;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  notes: string | null;
+};
+
+export async function updateAppointment(input: UpdateAppointmentInput) {
+  const { data, error } = await supabase
+    .from("appointments")
+    .update({
+      patient_name: input.patientName,
+      patient_phone: input.patientPhone,
+      doctor_id: input.doctorId,
+      service_category_id: input.serviceCategoryId,
+      service_name: input.serviceName,
+      reason: input.reason,
+      urgency: input.urgency,
+      start_time: input.startTime,
+      end_time: input.endTime,
+      duration_minutes: input.durationMinutes,
+      notes: input.notes,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.appointmentId)
+    .eq("clinic_id", input.clinicId)
+    .select("id")
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data;
+}
