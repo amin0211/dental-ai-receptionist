@@ -44,15 +44,15 @@ export type CreateServiceKeywordInput = {
   matchType: string;
 };
 
-export async function getCurrentSession() {
-  const { data, error } = await supabase.auth.getSession();
+// export async function getCurrentSession() {
+//   const { data, error } = await supabase.auth.getSession();
 
-  if (error) {
-    throw new Error(error.message);
-  }
+//   if (error) {
+//     throw new Error(error.message);
+//   }
 
-  return data.session;
-}
+//   return data.session;
+// }
 
 export async function getServiceCategories(clinicId?: string | null) {
   let query = supabase
@@ -738,6 +738,43 @@ export async function updateCalendarAvailabilityThisAndFuture(input: {
   timezone: string;
   notes: string | null;
 }) {
+  const safeNewEndDate =
+    input.newEndDate && input.newEndDate >= input.clickedDate
+      ? input.newEndDate
+      : null;
+
+  // اگر روی اولین روز rule کلیک شده باشد، چیزی قبل از آن وجود ندارد.
+  // پس split نمی‌کنیم؛ همان rule اصلی را update می‌کنیم.
+  if (input.originalRule.start_date >= input.clickedDate) {
+    const { error: updateRuleError } = await supabase
+      .from("calendar_availability_rules")
+      .update({
+        start_date: input.clickedDate,
+        end_date: safeNewEndDate,
+        start_time: input.startTime,
+        end_time: input.endTime,
+        timezone: input.timezone,
+        notes: input.notes,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", input.originalRule.id);
+
+    if (updateRuleError) throw new Error(updateRuleError.message);
+
+    const { error: deleteFutureExceptionsError } = await supabase
+      .from("calendar_availability_exceptions")
+      .delete()
+      .eq("rule_id", input.originalRule.id)
+      .gte("exception_date", input.clickedDate);
+
+    if (deleteFutureExceptionsError) {
+      throw new Error(deleteFutureExceptionsError.message);
+    }
+
+    return;
+  }
+
+  // اگر وسط rule کلیک شده باشد، rule قبلی تا روز قبل کوتاه می‌شود.
   const previousDay = addDaysToDateString(input.clickedDate, -1);
 
   const { error: updateOldRuleError } = await supabase
@@ -750,13 +787,14 @@ export async function updateCalendarAvailabilityThisAndFuture(input: {
 
   if (updateOldRuleError) throw new Error(updateOldRuleError.message);
 
+  // rule جدید از تاریخ کلیک‌شده شروع می‌شود.
   const { error: insertNewRuleError } = await supabase
     .from("calendar_availability_rules")
     .insert({
       clinic_id: input.clinicId,
       doctor_id: input.originalRule.doctor_id,
       start_date: input.clickedDate,
-      end_date: input.newEndDate,
+      end_date: safeNewEndDate,
       day_of_week: input.originalRule.day_of_week,
       start_time: input.startTime,
       end_time: input.endTime,
@@ -778,7 +816,6 @@ export async function updateCalendarAvailabilityThisAndFuture(input: {
     throw new Error(deleteFutureExceptionsError.message);
   }
 }
-
 
 export async function cancelCalendarAvailabilityThisAndFuture(input: {
   originalRuleId: string;
@@ -828,4 +865,72 @@ export async function cancelCalendarAvailabilityThisAndFuture(input: {
   if (deleteFutureExceptionsError) {
     throw new Error(deleteFutureExceptionsError.message);
   }
+}
+
+export type Clinic = {
+  id: string;
+  name: string;
+  phone_number: string | null;
+  timezone: string | null;
+  address: string | null;
+  created_at: string | null;
+  owner_user_id: string | null;
+  admin_full_name: string | null;
+  admin_email: string | null;
+  twilio_phone_number: string | null;
+};
+
+export type CreateClinicInput = {
+  ownerUserId: string;
+  clinicName: string;
+  adminFullName: string;
+  adminEmail: string;
+  phoneNumber: string;
+  timezone: string;
+  address: string | null;
+};
+
+export async function createClinic(input: CreateClinicInput) {
+  const { data, error } = await supabase
+    .from("clinics")
+    .insert({
+      owner_user_id: input.ownerUserId,
+      name: input.clinicName,
+      admin_full_name: input.adminFullName,
+      admin_email: input.adminEmail,
+      phone_number: input.phoneNumber,
+      timezone: input.timezone,
+      address: input.address,
+      twilio_phone_number: null,
+    })
+    .select(
+      "id, name, phone_number, timezone, address, created_at, owner_user_id, admin_full_name, admin_email, twilio_phone_number"
+    )
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data?.id) {
+    throw new Error("Clinic was created, but no clinic id was returned.");
+  }
+
+  return data as Clinic;
+}
+
+export async function getClinicByOwnerUserId(ownerUserId: string) {
+  const { data, error } = await supabase
+    .from("clinics")
+    .select(
+      "id, name, phone_number, timezone, address, created_at, owner_user_id, admin_full_name, admin_email, twilio_phone_number"
+    )
+    .eq("owner_user_id", ownerUserId)
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as Clinic;
 }

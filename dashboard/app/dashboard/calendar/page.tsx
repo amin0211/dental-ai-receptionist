@@ -7,8 +7,9 @@ import {
   useMemo,
   useState,
 } from "react";
-import { useRouter } from "next/navigation";
+
 import DashboardShell from "@/components/layout/DashboardShell";
+import { useClinic } from "@/components/providers/ClinicProvider";
 import {
   CalendarAvailabilityException,
   CalendarAvailabilityRule,
@@ -19,7 +20,6 @@ import {
   getCalendarAvailabilityExceptions,
   getCalendarAvailabilityRules,
   getClinicDoctors,
-  getCurrentSession,
   updateCalendarAvailabilityOnlyThisDay,
   updateCalendarAvailabilityThisAndFuture,
 } from "@/lib/supabaseService";
@@ -179,8 +179,8 @@ function generateMonthEvents({
 }
 
 export default function CalendarPage() {
-  const router = useRouter();
-  const currentClinicId = process.env.NEXT_PUBLIC_CLINIC_ID || "";
+  const { clinic, clinicId, isLoadingClinic } = useClinic();
+  const currentClinicId = clinicId || "";
 
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [isLoadingCalendar, setIsLoadingCalendar] = useState(true);
@@ -253,66 +253,68 @@ export default function CalendarPage() {
     return map;
   }, [visibleEvents]);
 
-  useEffect(() => {
-    async function loadPage() {
-      try {
-        setErrorMessage("");
+useEffect(() => {
+  async function loadPage() {
+    if (isLoadingClinic) return;
 
-        if (!currentClinicId) {
-          setErrorMessage("Missing NEXT_PUBLIC_CLINIC_ID in .env.local.");
-          setIsCheckingSession(false);
-          setIsLoadingCalendar(false);
-          return;
-        }
+    try {
+      setErrorMessage("");
 
-        const session = await getCurrentSession();
-
-        if (!session) {
-          router.replace("/login");
-          return;
-        }
-
-        setIsCheckingSession(false);
-
-        const loadedDoctors = await getClinicDoctors(currentClinicId);
-        setDoctors(loadedDoctors);
-
-        await loadCalendar();
-      } catch (error) {
-        console.error("Load calendar page error:", error);
-        setErrorMessage(
-          error instanceof Error ? error.message : "Failed to load calendar."
-        );
+      if (!currentClinicId) {
+        setErrorMessage("Clinic was not found for this account.");
         setIsCheckingSession(false);
         setIsLoadingCalendar(false);
+        return;
       }
+
+      setIsCheckingSession(false);
+
+      const loadedDoctors = await getClinicDoctors(currentClinicId);
+      setDoctors(loadedDoctors);
+
+      await loadCalendar();
+    } catch (error) {
+      console.error("Load calendar page error:", error);
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to load calendar."
+      );
+      setIsCheckingSession(false);
+      setIsLoadingCalendar(false);
     }
+  }
 
-    loadPage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router]);
+  loadPage();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [currentClinicId, isLoadingClinic]);
 
-  useEffect(() => {
-    if (!isCheckingSession && currentClinicId) {
-      loadCalendar();
+useEffect(() => {
+  if (!isCheckingSession && currentClinicId) {
+    loadCalendar();
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [currentMonth, scope, currentClinicId]);
+
+useEffect(() => {
+  if (!selectedEvent) return;
+
+  if (editMode === "only_this_day") {
+    setFormStartDate(selectedEvent.date);
+    setFormEndDate(selectedEvent.date);
+    return;
+  }
+
+  if (editMode === "this_and_future") {
+    setFormStartDate(selectedEvent.date);
+
+    const originalEndDate = selectedEvent.originalRule.end_date;
+
+    if (originalEndDate && originalEndDate >= selectedEvent.date) {
+      setFormEndDate(originalEndDate);
+    } else {
+      setFormEndDate("");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentMonth, scope]);
-
-  useEffect(() => {
-    if (!selectedEvent) return;
-
-    if (editMode === "only_this_day") {
-      setFormStartDate(selectedEvent.date);
-      setFormEndDate(selectedEvent.date);
-      return;
-    }
-
-    if (editMode === "this_and_future") {
-      setFormStartDate(selectedEvent.date);
-      setFormEndDate(selectedEvent.originalRule.end_date || "");
-    }
-  }, [editMode, selectedEvent]);
+  }
+}, [editMode, selectedEvent]);
 
   async function loadCalendar() {
     try {
@@ -358,7 +360,7 @@ function openAddModal(dateString: string) {
   setErrorMessage("");
 
   if (scope === "all") {
-    setErrorMessage("Please select Clinic availability or a doctor before adding availability.");
+        setErrorMessage("Select Clinic availability or a doctor from the top dropdown before adding availability.");
     return;
   }
 
@@ -368,7 +370,7 @@ function openAddModal(dateString: string) {
   setFormStartTime("09:00");
   setFormEndTime("17:00");
   setFormRepeatType("none");
-  setFormTimezone("America/Vancouver");
+  setFormTimezone(clinic?.timezone || "America/Vancouver");
   setFormNotes("");
 
   if (scope === "clinic") {
@@ -416,7 +418,11 @@ function openAddModal(dateString: string) {
         setErrorMessage("Start time must be before end time.");
         return;
       }
-
+      
+        if (formEndDate && formEndDate < formStartDate) {
+        setErrorMessage("Repeat until must be the same day as start date or after it.");
+        return;
+        }
       setIsSaving(true);
 
       const startDateObject = new Date(`${formStartDate}T00:00:00`);
@@ -477,10 +483,14 @@ function openAddModal(dateString: string) {
         return;
       }
 
-      if (formEndDate && formEndDate < formStartDate) {
-        setErrorMessage("Repeat until must be after start date.");
-        return;
-      }
+    if (
+    editMode === "only_this_day" &&
+    formEndDate &&
+    formEndDate < formStartDate
+    ) {
+    setErrorMessage("Repeat until must be the same day as start date or after it.");
+    return;
+    }
 
       setIsSaving(true);
 
@@ -495,18 +505,21 @@ function openAddModal(dateString: string) {
         });
       }
 
-      if (editMode === "this_and_future") {
-        await updateCalendarAvailabilityThisAndFuture({
-          clinicId: currentClinicId,
-          originalRule: selectedEvent.originalRule,
-          clickedDate: selectedEvent.date,
-          newEndDate: formEndDate || null,
-          startTime: formStartTime,
-          endTime: formEndTime,
-          timezone: formTimezone,
-          notes: formNotes.trim() ? formNotes.trim() : null,
-        });
-      }
+    if (editMode === "this_and_future") {
+    const safeEndDate =
+        formEndDate && formEndDate >= selectedEvent.date ? formEndDate : null;
+
+    await updateCalendarAvailabilityThisAndFuture({
+        clinicId: currentClinicId,
+        originalRule: selectedEvent.originalRule,
+        clickedDate: selectedEvent.date,
+        newEndDate: safeEndDate,
+        startTime: formStartTime,
+        endTime: formEndTime,
+        timezone: formTimezone,
+        notes: formNotes.trim() ? formNotes.trim() : null,
+    });
+    }
 
       setIsEventModalOpen(false);
       setSelectedEvent(null);

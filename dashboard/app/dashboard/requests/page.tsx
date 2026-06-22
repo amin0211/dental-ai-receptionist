@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import DashboardShell from "@/components/layout/DashboardShell";
+import { useClinic } from "@/components/providers/ClinicProvider";
 
 type AppointmentRequest = {
   id: string;
@@ -38,6 +39,8 @@ function getStatusBadgeClass(status: string | null) {
       return "bg-blue-50 text-blue-700 border-blue-200";
     case "needs_followup":
       return "bg-amber-50 text-amber-700 border-amber-200";
+    case "slot_offered":
+      return "bg-indigo-50 text-indigo-700 border-indigo-200";
     case "confirmed":
       return "bg-emerald-50 text-emerald-700 border-emerald-200";
     case "cancelled":
@@ -47,26 +50,49 @@ function getStatusBadgeClass(status: string | null) {
   }
 }
 
+function getStatusTitle(status: string | null) {
+  switch (status) {
+    case "new":
+      return "New Requests";
+    case "needs_followup":
+      return "Needs Follow-up";
+    case "slot_offered":
+      return "Slot Offered";
+    case "confirmed":
+      return "Confirmed Requests";
+    case "cancelled":
+      return "Cancelled Requests";
+    default:
+      return "Latest Requests";
+  }
+}
+
 export default function RequestsPage() {
-  const router = useRouter();
+  const searchParams = useSearchParams();
+  const statusFilter = searchParams.get("status");
+
+  const { clinicId, isLoadingClinic } = useClinic();
 
   const [requests, setRequests] = useState<AppointmentRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
 
+  const pageTitle = useMemo(() => getStatusTitle(statusFilter), [statusFilter]);
+
   useEffect(() => {
     async function loadRequests() {
+      if (isLoadingClinic) return;
+
       setIsLoading(true);
       setErrorMessage("");
 
-      const { data: sessionData } = await supabase.auth.getSession();
-
-      if (!sessionData.session) {
-        router.replace("/login");
+      if (!clinicId) {
+        setErrorMessage("Clinic was not found for this account.");
+        setIsLoading(false);
         return;
       }
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("appointment_requests")
         .select(
           `
@@ -84,8 +110,15 @@ export default function RequestsPage() {
           duration_minutes
         `
         )
+        .eq("clinic_id", clinicId)
         .order("created_at", { ascending: false })
         .limit(50);
+
+      if (statusFilter) {
+        query = query.eq("status", statusFilter);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         console.error("Error loading appointment requests:", error);
@@ -99,7 +132,17 @@ export default function RequestsPage() {
     }
 
     loadRequests();
-  }, [router]);
+  }, [clinicId, isLoadingClinic, statusFilter]);
+
+  if (isLoadingClinic) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50">
+        <p className="text-sm font-medium text-slate-500">
+          Loading clinic...
+        </p>
+      </main>
+    );
+  }
 
   return (
     <DashboardShell
@@ -108,11 +151,12 @@ export default function RequestsPage() {
     >
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-5 py-4">
-          <h2 className="text-lg font-bold text-slate-900">
-            Latest Requests
-          </h2>
+          <h2 className="text-lg font-bold text-slate-900">{pageTitle}</h2>
+
           <p className="mt-1 text-sm text-slate-500">
-            Showing the latest 50 requests.
+            {statusFilter
+              ? `Showing latest 50 requests with status: ${statusFilter}.`
+              : "Showing the latest 50 requests."}
           </p>
         </div>
 
@@ -130,7 +174,7 @@ export default function RequestsPage() {
 
         {!isLoading && !errorMessage && requests.length === 0 && (
           <div className="p-6 text-sm text-slate-500">
-            No appointment requests yet.
+            No appointment requests found.
           </div>
         )}
 
@@ -172,6 +216,7 @@ export default function RequestsPage() {
 
                     <td className="px-5 py-4 text-slate-700">
                       <div>{request.service_category_name || "-"}</div>
+
                       {request.duration_minutes && (
                         <div className="mt-1 text-xs text-slate-400">
                           {request.duration_minutes} min

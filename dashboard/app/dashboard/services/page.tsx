@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useClinic } from "@/components/providers/ClinicProvider";
 import DashboardShell from "@/components/layout/DashboardShell";
 import {
   ServiceCategory,
@@ -11,9 +11,9 @@ import {
   createServiceKeywords,
   deleteServiceKeyword,
   getActiveKeywordCounts,
-  getCurrentSession,
   getServiceCategories,
   getServiceKeywords,
+  disableServiceKeyword,
   updateServiceCategory,
   updateServiceKeyword,
   deleteServiceCategoryWithKeywords,
@@ -26,7 +26,9 @@ type KeywordDraft = {
 };
 
 export default function ServicesPage() {
-  const router = useRouter();
+  const { clinicId, isLoadingClinic } = useClinic();
+
+  const currentClinicId = clinicId;
 
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [isLoadingServices, setIsLoadingServices] = useState(true);
@@ -68,9 +70,7 @@ const [editKeyword, setEditKeyword] = useState("");
 const [editKeywordLanguage, setEditKeywordLanguage] = useState("fa");
 const [editKeywordMatchType, setEditKeywordMatchType] = useState("contains");
 const [editKeywordIsActive, setEditKeywordIsActive] = useState(true);
-  // فعلاً clinic_id در دیتابیس nullable است، پس در UI نشان داده نمی‌شود.
-  // اگر بعداً جدول clinics/profile را وصل کردی، فقط مقدار این state را از service جداگانه پر کن.
-  const [currentClinicId] = useState<string | null>(null);
+
 
   const [name, setName] = useState("");
   const [canonicalReason, setCanonicalReason] = useState("");
@@ -110,32 +110,36 @@ const [editKeywordIsActive, setEditKeywordIsActive] = useState(true);
     });
   }, [services, searchText]);
 
+  
   useEffect(() => {
-    async function loadPage() {
-      try {
-        setErrorMessage("");
+  async function loadPage() {
+    if (isLoadingClinic) return;
 
-        const session = await getCurrentSession();
+    try {
+      setErrorMessage("");
 
-        if (!session) {
-          router.replace("/login");
-          return;
-        }
-
+      if (!currentClinicId) {
+        setErrorMessage("Clinic was not found for this account.");
         setIsCheckingSession(false);
-        await loadServices();
-      } catch (error) {
-        console.error("Load services page error:", error);
-        setErrorMessage(
-          error instanceof Error ? error.message : "Failed to load services page."
-        );
-        setIsCheckingSession(false);
+        setIsLoadingServices(false);
+        return;
       }
-    }
 
-    loadPage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router]);
+      setIsCheckingSession(false);
+      await loadServices();
+    } catch (error) {
+      console.error("Load services page error:", error);
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to load services page."
+      );
+      setIsCheckingSession(false);
+      setIsLoadingServices(false);
+    }
+  }
+
+  loadPage();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [currentClinicId, isLoadingClinic]);
 
   async function loadServices(nextSelectedServiceId?: string) {
     try {
@@ -550,11 +554,11 @@ async function handleDeleteService(service: ServiceCategory) {
     );
   }
 }
-  if (isCheckingSession) {
+  if (isCheckingSession || isLoadingClinic) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50">
         <p className="text-sm font-medium text-slate-500">
-          Checking session...
+          Loading clinic...
         </p>
       </main>
     );

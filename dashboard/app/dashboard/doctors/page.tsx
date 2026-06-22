@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useClinic } from "@/components/providers/ClinicProvider";
 import DashboardShell from "@/components/layout/DashboardShell";
 import {
   ClinicDoctor,
@@ -11,16 +11,15 @@ import {
   deleteClinicDoctorWithServices,
   getClinicDoctorServices,
   getClinicDoctors,
-  getCurrentSession,
   getServiceCategories,
   updateClinicDoctor,
   setClinicDoctorServiceActive,
 } from "@/lib/supabaseService";
 
 export default function DoctorsPage() {
-  const router = useRouter();
+  const { clinicId, isLoadingClinic } = useClinic();
 
-  const currentClinicId = process.env.NEXT_PUBLIC_CLINIC_ID || "";
+  const currentClinicId = clinicId || "";
 
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [isLoadingDoctors, setIsLoadingDoctors] = useState(true);
@@ -117,42 +116,36 @@ export default function DoctorsPage() {
     );
   }, [doctorServices, serviceCategories]);
 
-  useEffect(() => {
-    async function loadPage() {
-      try {
-        setErrorMessage("");
+useEffect(() => {
+  async function loadPage() {
+    if (isLoadingClinic) return;
 
-        if (!currentClinicId) {
-          setErrorMessage(
-            "Missing NEXT_PUBLIC_CLINIC_ID. Add it to .env.local first."
-          );
-          setIsCheckingSession(false);
-          setIsLoadingDoctors(false);
-          return;
-        }
+    try {
+      setErrorMessage("");
 
-        const session = await getCurrentSession();
-
-        if (!session) {
-          router.replace("/login");
-          return;
-        }
-
+      if (!currentClinicId) {
+        setErrorMessage("Clinic was not found for this account.");
         setIsCheckingSession(false);
-
-        await Promise.all([loadDoctors(), loadServiceCategories()]);
-      } catch (error) {
-        console.error("Load doctors page error:", error);
-        setErrorMessage(
-          error instanceof Error ? error.message : "Failed to load doctors page."
-        );
-        setIsCheckingSession(false);
+        setIsLoadingDoctors(false);
+        return;
       }
-    }
 
-    loadPage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router]);
+      setIsCheckingSession(false);
+
+      await Promise.all([loadDoctors(), loadServiceCategories()]);
+    } catch (error) {
+      console.error("Load doctors page error:", error);
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to load doctors page."
+      );
+      setIsCheckingSession(false);
+      setIsLoadingDoctors(false);
+    }
+  }
+
+  loadPage();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [currentClinicId, isLoadingClinic]);
 
   async function loadDoctors(nextSelectedDoctorId?: string) {
     try {
@@ -187,7 +180,7 @@ export default function DoctorsPage() {
 
   async function loadServiceCategories() {
     try {
-      const loadedServices = await getServiceCategories();
+      const loadedServices = await getServiceCategories(currentClinicId);
       setServiceCategories(loadedServices);
     } catch (error) {
       console.error("Load service categories error:", error);
@@ -516,11 +509,11 @@ try {
     }
   }
 
-  if (isCheckingSession) {
+  if (isCheckingSession || isLoadingClinic) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50">
         <p className="text-sm font-medium text-slate-500">
-          Checking session...
+          Loading clinic...
         </p>
       </main>
     );

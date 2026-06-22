@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import DashboardShell from "@/components/layout/DashboardShell";
+import { useClinic } from "@/components/providers/ClinicProvider";
 
 type DashboardStats = {
   newRequests: number;
@@ -17,8 +17,10 @@ type DashboardStats = {
 type AppointmentRequest = {
   id: string;
   patient_name: string | null;
-  service_name: string | null;
-  doctor_name: string | null;
+  service_name?: string | null;
+  doctor_name?: string | null;
+  doctor_id?: string | null;
+  service_category_id?: string | null;
   status: string | null;
   created_at: string | null;
 };
@@ -59,9 +61,8 @@ function formatDate(value: string | null) {
 }
 
 export default function DashboardPage() {
-  const router = useRouter();
+  const { clinic, clinicId, isLoadingClinic } = useClinic();
 
-  const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -77,16 +78,10 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function loadDashboard() {
+      if (isLoadingClinic) return;
+      if (!clinicId) return;
+
       setErrorMessage("");
-
-      const { data: sessionData } = await supabase.auth.getSession();
-
-      if (!sessionData.session) {
-        router.replace("/login");
-        return;
-      }
-
-      setIsCheckingSession(false);
       setIsLoadingStats(true);
 
       const [
@@ -98,21 +93,27 @@ export default function DashboardPage() {
         supabase
           .from("appointment_requests")
           .select("id", { count: "exact", head: true })
+          .eq("clinic_id", clinicId)
           .eq("status", "new"),
 
         supabase
           .from("appointment_requests")
           .select("id", { count: "exact", head: true })
+          .eq("clinic_id", clinicId)
           .eq("status", "needs_followup"),
 
         supabase
           .from("appointment_requests")
           .select("id", { count: "exact", head: true })
+          .eq("clinic_id", clinicId)
           .eq("status", "slot_offered"),
 
         supabase
           .from("appointment_requests")
-          .select("id, patient_name, doctor_id, service_category_id, status, created_at")
+          .select(
+            "id, patient_name, doctor_id, service_category_id, status, created_at"
+          )
+          .eq("clinic_id", clinicId)
           .order("created_at", { ascending: false })
           .limit(5),
       ]);
@@ -158,13 +159,13 @@ export default function DashboardPage() {
     }
 
     loadDashboard();
-  }, [router]);
+  }, [clinicId, isLoadingClinic]);
 
-  if (isCheckingSession) {
+  if (isLoadingClinic) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50">
         <p className="text-sm font-medium text-slate-500">
-          Checking session...
+          Loading clinic...
         </p>
       </main>
     );
@@ -172,7 +173,7 @@ export default function DashboardPage() {
 
   return (
     <DashboardShell
-      title="Clinic Workbench"
+      title={clinic?.name || "Clinic Dashboard"}
       description="Monitor AI calls, appointment requests, doctors, and clinic activity."
     >
       {errorMessage && (
@@ -180,6 +181,8 @@ export default function DashboardPage() {
           {errorMessage}
         </div>
       )}
+
+
 
       <div className="flex w-full flex-nowrap gap-4">
         <StatCard
@@ -240,7 +243,8 @@ export default function DashboardPage() {
 
           <div className="mt-5 space-y-3">
             <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">
-              Patients who asked for a specific time but no matching slot was found.
+              Patients who asked for a specific time but no matching slot was
+              found.
             </div>
 
             <div className="rounded-xl bg-red-50 p-4 text-sm text-red-900">
@@ -331,11 +335,13 @@ export default function DashboardPage() {
                     </td>
 
                     <td className="px-4 py-4 text-slate-600">
-                      {request.service_name || "-"}
+                      {request.service_name ||
+                        request.service_category_id ||
+                        "-"}
                     </td>
 
                     <td className="px-4 py-4 text-slate-600">
-                      {request.doctor_name || "Any doctor"}
+                      {request.doctor_name || request.doctor_id || "Any doctor"}
                     </td>
 
                     <td className="px-4 py-4">
@@ -385,7 +391,9 @@ export default function DashboardPage() {
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-500">Appointments booked</span>
+              <span className="text-sm text-slate-500">
+                Appointments booked
+              </span>
               <span className="font-bold text-slate-900">
                 {isLoadingStats ? "..." : stats.todaysAppointments}
               </span>
