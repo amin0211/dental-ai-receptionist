@@ -522,3 +522,310 @@ export async function setClinicDoctorServiceActive({
 
   if (error) throw new Error(error.message);
 }
+
+export type CalendarAvailabilityRule = {
+  id: string;
+  clinic_id: string;
+  doctor_id: string | null;
+  start_date: string;
+  end_date: string | null;
+  day_of_week: number | null;
+  start_time: string;
+  end_time: string;
+  timezone: string;
+  repeat_type: "none" | "daily" | "weekly" | "weekdays" | "custom";
+  is_active: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CalendarAvailabilityException = {
+  id: string;
+  clinic_id: string;
+  rule_id: string;
+  exception_date: string;
+  exception_type: "cancelled" | "modified";
+  start_time: string | null;
+  end_time: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateCalendarAvailabilityRuleInput = {
+  clinicId: string;
+  doctorId: string | null;
+  startDate: string;
+  endDate: string | null;
+  dayOfWeek: number | null;
+  startTime: string;
+  endTime: string;
+  timezone: string;
+  repeatType: "none" | "daily" | "weekly" | "weekdays" | "custom";
+  isActive: boolean;
+  notes: string | null;
+};
+
+
+
+
+export async function getCalendarAvailabilityRules({
+  clinicId,
+  doctorId,
+  monthStart,
+  monthEnd,
+}: {
+  clinicId: string;
+  doctorId?: string | null;
+  monthStart: string;
+  monthEnd: string;
+}) {
+  let query = supabase
+    .from("calendar_availability_rules")
+    .select(
+      "id, clinic_id, doctor_id, start_date, end_date, day_of_week, start_time, end_time, timezone, repeat_type, is_active, notes, created_at, updated_at"
+    )
+    .eq("clinic_id", clinicId)
+    .eq("is_active", true)
+    .lte("start_date", monthEnd)
+    .or(`end_date.is.null,end_date.gte.${monthStart}`)
+    .order("start_date", { ascending: true });
+
+  if (doctorId !== undefined) {
+    if (doctorId === null) {
+      query = query.is("doctor_id", null);
+    } else {
+      query = query.eq("doctor_id", doctorId);
+    }
+  }
+
+  const { data, error } = await query;
+
+  if (error) throw new Error(error.message);
+
+  return data || [];
+}
+
+export async function getCalendarAvailabilityExceptions({
+  clinicId,
+  ruleIds,
+  monthStart,
+  monthEnd,
+}: {
+  clinicId: string;
+  ruleIds: string[];
+  monthStart: string;
+  monthEnd: string;
+}) {
+  if (ruleIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("calendar_availability_exceptions")
+    .select(
+      "id, clinic_id, rule_id, exception_date, exception_type, start_time, end_time, notes, created_at, updated_at"
+    )
+    .eq("clinic_id", clinicId)
+    .in("rule_id", ruleIds)
+    .gte("exception_date", monthStart)
+    .lte("exception_date", monthEnd)
+    .order("exception_date", { ascending: true });
+
+  if (error) throw new Error(error.message);
+
+  return data || [];
+}
+
+export async function createCalendarAvailabilityRule(
+  input: CreateCalendarAvailabilityRuleInput
+) {
+  const { data, error } = await supabase
+    .from("calendar_availability_rules")
+    .insert({
+      clinic_id: input.clinicId,
+      doctor_id: input.doctorId,
+      start_date: input.startDate,
+      end_date: input.endDate,
+      day_of_week: input.dayOfWeek,
+      start_time: input.startTime,
+      end_time: input.endTime,
+      timezone: input.timezone,
+      repeat_type: input.repeatType,
+      is_active: input.isActive,
+      notes: input.notes,
+    })
+    .select("id")
+    .single();
+
+  if (error) throw new Error(error.message);
+
+  return data.id as string;
+}
+
+
+
+
+
+function addDaysToDateString(dateString: string, days: number) {
+  const date = new Date(`${dateString}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export async function updateCalendarAvailabilityOnlyThisDay(input: {
+  clinicId: string;
+  ruleId: string;
+  exceptionDate: string;
+  startTime: string;
+  endTime: string;
+  notes: string | null;
+}) {
+  const { error } = await supabase
+    .from("calendar_availability_exceptions")
+    .upsert(
+      {
+        clinic_id: input.clinicId,
+        rule_id: input.ruleId,
+        exception_date: input.exceptionDate,
+        exception_type: "modified",
+        start_time: input.startTime,
+        end_time: input.endTime,
+        notes: input.notes,
+        updated_at: new Date().toISOString(),
+      },
+      {
+        onConflict: "rule_id,exception_date",
+      }
+    );
+
+  if (error) throw new Error(error.message);
+}
+
+export async function cancelCalendarAvailabilityOnlyThisDay(input: {
+  clinicId: string;
+  ruleId: string;
+  exceptionDate: string;
+  notes: string | null;
+}) {
+  const { error } = await supabase
+    .from("calendar_availability_exceptions")
+    .upsert(
+      {
+        clinic_id: input.clinicId,
+        rule_id: input.ruleId,
+        exception_date: input.exceptionDate,
+        exception_type: "cancelled",
+        start_time: null,
+        end_time: null,
+        notes: input.notes,
+        updated_at: new Date().toISOString(),
+      },
+      {
+        onConflict: "rule_id,exception_date",
+      }
+    );
+
+  if (error) throw new Error(error.message);
+}
+
+export async function updateCalendarAvailabilityThisAndFuture(input: {
+  clinicId: string;
+  originalRule: CalendarAvailabilityRule;
+  clickedDate: string;
+  newEndDate: string | null;
+  startTime: string;
+  endTime: string;
+  timezone: string;
+  notes: string | null;
+}) {
+  const previousDay = addDaysToDateString(input.clickedDate, -1);
+
+  const { error: updateOldRuleError } = await supabase
+    .from("calendar_availability_rules")
+    .update({
+      end_date: previousDay,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.originalRule.id);
+
+  if (updateOldRuleError) throw new Error(updateOldRuleError.message);
+
+  const { error: insertNewRuleError } = await supabase
+    .from("calendar_availability_rules")
+    .insert({
+      clinic_id: input.clinicId,
+      doctor_id: input.originalRule.doctor_id,
+      start_date: input.clickedDate,
+      end_date: input.newEndDate,
+      day_of_week: input.originalRule.day_of_week,
+      start_time: input.startTime,
+      end_time: input.endTime,
+      timezone: input.timezone,
+      repeat_type: input.originalRule.repeat_type,
+      is_active: true,
+      notes: input.notes,
+    });
+
+  if (insertNewRuleError) throw new Error(insertNewRuleError.message);
+
+  const { error: deleteFutureExceptionsError } = await supabase
+    .from("calendar_availability_exceptions")
+    .delete()
+    .eq("rule_id", input.originalRule.id)
+    .gte("exception_date", input.clickedDate);
+
+  if (deleteFutureExceptionsError) {
+    throw new Error(deleteFutureExceptionsError.message);
+  }
+}
+
+
+export async function cancelCalendarAvailabilityThisAndFuture(input: {
+  originalRuleId: string;
+  clickedDate: string;
+}) {
+  const { data: originalRule, error: findRuleError } = await supabase
+    .from("calendar_availability_rules")
+    .select("id, start_date")
+    .eq("id", input.originalRuleId)
+    .single();
+
+  if (findRuleError) throw new Error(findRuleError.message);
+
+  // اگر روی اولین روز rule کلیک شده باشد،
+  // دیگر قسمت قبلی وجود ندارد که نگه داریم، پس کل rule حذف می‌شود.
+  if (originalRule.start_date >= input.clickedDate) {
+    const { error: deleteRuleError } = await supabase
+      .from("calendar_availability_rules")
+      .delete()
+      .eq("id", input.originalRuleId);
+
+    if (deleteRuleError) throw new Error(deleteRuleError.message);
+
+    return;
+  }
+
+  // اگر روی وسط rule کلیک شده باشد،
+  // فقط rule قبلی را تا روز قبل کوتاه می‌کنیم.
+  const previousDay = addDaysToDateString(input.clickedDate, -1);
+
+  const { error: updateOldRuleError } = await supabase
+    .from("calendar_availability_rules")
+    .update({
+      end_date: previousDay,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.originalRuleId);
+
+  if (updateOldRuleError) throw new Error(updateOldRuleError.message);
+
+  const { error: deleteFutureExceptionsError } = await supabase
+    .from("calendar_availability_exceptions")
+    .delete()
+    .eq("rule_id", input.originalRuleId)
+    .gte("exception_date", input.clickedDate);
+
+  if (deleteFutureExceptionsError) {
+    throw new Error(deleteFutureExceptionsError.message);
+  }
+}
