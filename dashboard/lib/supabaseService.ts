@@ -58,7 +58,7 @@ export async function getServiceCategories(clinicId?: string | null) {
   let query = supabase
     .from("service_categories")
     .select(
-      "id, clinic_id, name, canonical_reason, default_urgency, creates_appointment_request, is_active, created_at, default_duration_minutes, description, updated_at, reason, urgency"
+      "id, clinic_id, name, canonical_reason, default_urgency, creates_appointment_request, is_active, created_at, default_duration_minutes, description, updated_at"
     )
     .order("created_at", { ascending: false });
 
