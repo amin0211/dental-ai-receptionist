@@ -1307,3 +1307,183 @@ def get_booking_options_for_ai(
         "slots": best_slots,
         "message_for_ai": "Offer these appointment options to the caller and ask which one works better.",
     }
+
+def create_call_session(
+    clinic_id: str | None,
+    call_id: str | None,
+    twilio_call_sid: str | None,
+    caller_phone: str | None,
+    current_state: str = "collect_reason",
+    pending_question: str | None = "reason",
+    language: str | None = "en",
+):
+    if not supabase:
+        print("Supabase client is not initialized")
+        return None
+
+    try:
+        payload = {
+            "clinic_id": clinic_id,
+            "call_id": call_id,
+            "twilio_call_sid": twilio_call_sid,
+            "caller_phone": normalize_phone(caller_phone),
+            "current_state": current_state,
+            "pending_question": pending_question,
+            "language": language or "en",
+        }
+
+        print(f"Inserting call session payload: {payload}")
+
+        result = supabase.table("call_sessions").insert(payload).execute()
+
+        print(f"Call session insert result: {result.data}")
+
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error creating call session: {e}")
+        return None
+
+
+def get_call_session_by_twilio_sid(twilio_call_sid: str | None):
+    if not supabase or not twilio_call_sid:
+        print("Cannot get call session: missing supabase or twilio_call_sid")
+        return None
+
+    try:
+        result = (
+            supabase.table("call_sessions")
+            .select("*")
+            .eq("twilio_call_sid", twilio_call_sid)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error loading call session: {e}")
+        return None
+
+
+def update_call_session(call_session_id: str, updates: dict):
+    if not supabase:
+        print("Supabase client is not initialized")
+        return None
+
+    if not call_session_id:
+        print("Cannot update call session: missing call_session_id")
+        return None
+
+    try:
+        print(f"Updating call session {call_session_id}: {updates}")
+
+        result = (
+            supabase.table("call_sessions")
+            .update(updates)
+            .eq("id", call_session_id)
+            .execute()
+        )
+
+        print(f"Call session update result: {result.data}")
+
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error updating call session: {e}")
+        return None
+
+
+def get_next_turn_index(call_session_id: str | None) -> int:
+    if not supabase or not call_session_id:
+        return 1
+
+    try:
+        result = (
+            supabase.table("call_turn_logs")
+            .select("turn_index")
+            .eq("call_session_id", call_session_id)
+            .order("turn_index", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        if result.data and result.data[0].get("turn_index") is not None:
+            return int(result.data[0]["turn_index"]) + 1
+
+        return 1
+
+    except Exception as e:
+        print(f"Error getting next turn index: {e}")
+        return 1
+
+
+def save_call_turn_log(
+    call_session_id: str | None,
+    call_id: str | None,
+    twilio_call_sid: str | None,
+    role: str,
+    raw_text: str | None = None,
+    cleaned_text: str | None = None,
+    parsed_intent: str | None = None,
+    parsed_entities: dict | None = None,
+    confidence: float | None = None,
+    state_before: str | None = None,
+    state_after: str | None = None,
+    backend_action: str | None = None,
+    backend_response: str | None = None,
+    fallback_triggered: bool = False,
+    fallback_reason: str | None = None,
+    error_message: str | None = None,
+):
+    if not supabase:
+        print("Supabase client is not initialized")
+        return None
+
+    try:
+        turn_index = get_next_turn_index(call_session_id)
+
+        payload = {
+            "call_session_id": call_session_id,
+            "call_id": call_id,
+            "twilio_call_sid": twilio_call_sid,
+            "turn_index": turn_index,
+            "role": role,
+            "raw_text": raw_text,
+            "cleaned_text": cleaned_text,
+            "parsed_intent": parsed_intent,
+            "parsed_entities": parsed_entities or {},
+            "confidence": confidence,
+            "state_before": state_before,
+            "state_after": state_after,
+            "backend_action": backend_action,
+            "backend_response": backend_response,
+            "fallback_triggered": fallback_triggered,
+            "fallback_reason": fallback_reason,
+            "error_message": error_message,
+        }
+
+        print(f"Inserting call turn log payload: {payload}")
+
+        result = supabase.table("call_turn_logs").insert(payload).execute()
+
+        print(f"Call turn log insert result: {result.data}")
+
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error saving call turn log: {e}")
+        return None

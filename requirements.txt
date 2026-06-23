@@ -1,6 +1,6 @@
 fastapi
-uvicorn[standard]
-python-multipart
+uvicorn
 supabase
+openai
 websockets
-openai>=1.93.0
+python-multipart
