@@ -58,7 +58,7 @@ export async function getServiceCategories(clinicId?: string | null) {
   let query = supabase
     .from("service_categories")
     .select(
-      "id, clinic_id, name, canonical_reason, default_urgency, creates_appointment_request, is_active, created_at, default_duration_minutes, description, updated_at"
+      "id, clinic_id, name, canonical_reason, default_urgency, creates_appointment_request, is_active, created_at, default_duration_minutes, description, updated_at, reason, urgency"
     )
     .order("created_at", { ascending: false });
 
@@ -1165,11 +1165,12 @@ export type Appointment = {
   doctor_id: string | null;
   service_category_id: string | null;
   service_name: string | null;
+  reason: string | null;
+  urgency: string | null;
   start_time: string;
   end_time: string;
   duration_minutes: number;
   status: string;
-  source: string;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -1219,6 +1220,8 @@ export async function getDoctorAppointmentsForRange({
       duration_minutes,
       status,
       source,
+      urgency,
+      reason,
       notes,
       created_at,
       updated_at
