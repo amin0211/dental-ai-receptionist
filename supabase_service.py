@@ -1487,3 +1487,35 @@ def save_call_turn_log(
     except Exception as e:
         print(f"Error saving call turn log: {e}")
         return None
+    
+def get_local_parser_rules(clinic_id: str | None = None, language: str | None = None):
+    if not supabase:
+        print("Supabase client is not initialized")
+        return []
+
+    try:
+        query = (
+            supabase.table("local_parser_rules")
+            .select("*")
+            .eq("is_active", True)
+            .order("priority", desc=False)
+        )
+
+        # Rules:
+        # 1. global rules: clinic_id is null
+        # 2. clinic-specific rules: clinic_id = current clinic
+        if clinic_id:
+            query = query.or_(f"clinic_id.is.null,clinic_id.eq.{clinic_id}")
+        else:
+            query = query.is_("clinic_id", "null")
+
+        if language:
+            query = query.in_("language", [language, "any"])
+
+        result = query.execute()
+
+        return result.data or []
+
+    except Exception as e:
+        print(f"Error loading local parser rules: {e}")
+        return []

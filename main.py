@@ -27,6 +27,7 @@ from supabase_service import (
     get_call_session_by_twilio_sid,
     update_call_session,
     save_call_turn_log,
+    get_local_parser_rules,
 )
 
 app = FastAPI()
@@ -67,7 +68,230 @@ def log_timing(label: str, start_ms: float, extra: str = ""):
     else:
         print(f"[TIMING] {label}: {elapsed:.1f}ms")
 
+LOCAL_RULE_CACHE: dict[str, dict] = {}
+LOCAL_RULE_CACHE_TTL_SECONDS = int(os.environ.get("LOCAL_RULE_CACHE_TTL_SECONDS", "300"))
 
+
+def normalize_parser_text(text: str | None) -> str:
+    value = (text or "").strip().lower()
+
+    replacements = {
+        "ي": "ی",
+        "ك": "ک",
+        "أ": "ا",
+        "إ": "ا",
+        "آ": "آ",
+    }
+
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+
+    value = " ".join(value.split())
+    return value
+
+
+def detect_simple_language(text: str | None, fallback: str = "en") -> str:
+    value = text or ""
+
+    for char in value:
+        if "\u0600" <= char <= "\u06FF":
+            return "fa"
+
+    return fallback or "en"
+
+
+def get_rules_cache_key(clinic_id: str | None, language: str) -> str:
+    return f"{clinic_id or 'global'}:{language or 'en'}"
+
+
+def get_cached_local_parser_rules(clinic_id: str | None, language: str) -> list[dict]:
+    cache_key = get_rules_cache_key(clinic_id, language)
+    now = time.time()
+
+    cached = LOCAL_RULE_CACHE.get(cache_key)
+
+    if cached and now - cached.get("loaded_at", 0) < LOCAL_RULE_CACHE_TTL_SECONDS:
+        return cached.get("rules", [])
+
+    load_start_ms = now_ms()
+
+    rules = get_local_parser_rules(
+        clinic_id=clinic_id,
+        language=language,
+    )
+
+    LOCAL_RULE_CACHE[cache_key] = {
+        "loaded_at": now,
+        "rules": rules,
+    }
+
+    log_timing(
+        "Supabase load local_parser_rules into cache",
+        load_start_ms,
+        f"clinic_id={clinic_id} language={language} rule_count={len(rules)}",
+    )
+
+    return rules
+
+
+def local_rule_matches(text: str, phrase: str, match_type: str) -> bool:
+    normalized_text = normalize_parser_text(text)
+    normalized_phrase = normalize_parser_text(phrase)
+
+    if not normalized_phrase:
+        return False
+
+    if match_type == "exact":
+        return normalized_text == normalized_phrase
+
+    if match_type == "starts_with":
+        return normalized_text.startswith(normalized_phrase)
+
+    if match_type == "contains":
+        return normalized_phrase in normalized_text
+
+    # MVP: regex را فعلاً غیرفعال نگه می‌داریم که ریسک امنیتی/bug کم شود
+    if match_type == "regex":
+        return False
+
+    return normalized_phrase in normalized_text
+
+
+def build_parsed_from_local_rule(
+    rule: dict,
+    caller_text: str,
+    session: dict,
+    language: str,
+) -> dict:
+    intent = rule.get("intent") or "unclear"
+    entity_key = rule.get("entity_key")
+    entity_value = rule.get("entity_value") or {}
+
+    parsed = {
+        "intent": intent,
+        "reason": None,
+        "reason_is_specific_enough": False,
+        "doctor_name": None,
+        "preferred_date_raw": None,
+        "date_confirmation": None,
+        "slot_choice": None,
+        "wants_repeat": False,
+        "is_emergency": False,
+        "is_unclear": False,
+        "language": language or session.get("language") or "en",
+        "confidence": float(rule.get("confidence") or 0.95),
+        "notes": f"Matched local parser rule: {rule.get('phrase')}",
+    }
+
+    if intent == "repeat":
+        parsed["wants_repeat"] = True
+
+    if intent == "provide_reason":
+        parsed["reason"] = caller_text
+
+    if intent == "emergency":
+        parsed["reason"] = caller_text
+        parsed["reason_is_specific_enough"] = True
+        parsed["is_emergency"] = True
+
+    if entity_key and isinstance(entity_value, dict):
+        value = entity_value.get("value")
+
+        if entity_key == "slot_choice":
+            parsed["slot_choice"] = int(value) if value is not None else None
+
+        elif entity_key == "date_confirmation":
+            parsed["date_confirmation"] = bool(value)
+
+        elif entity_key == "reason_is_specific_enough":
+            parsed["reason_is_specific_enough"] = bool(value)
+
+        elif entity_key == "is_emergency":
+            parsed["is_emergency"] = bool(value)
+
+    return parsed
+
+
+def classify_simple_turn_locally(caller_text: str, session: dict) -> dict | None:
+    local_start_ms = now_ms()
+
+    text = normalize_parser_text(caller_text)
+
+    if not text:
+        parsed = {
+            "intent": "unclear",
+            "reason": None,
+            "reason_is_specific_enough": False,
+            "doctor_name": None,
+            "preferred_date_raw": None,
+            "date_confirmation": None,
+            "slot_choice": None,
+            "wants_repeat": False,
+            "is_emergency": False,
+            "is_unclear": True,
+            "language": session.get("language") or "en",
+            "confidence": 0.0,
+            "notes": "Empty speech.",
+        }
+
+        log_timing(
+            "Local classify_simple_turn_locally",
+            local_start_ms,
+            "intent=unclear reason=empty",
+        )
+
+        return parsed
+
+    language = detect_simple_language(
+        caller_text,
+        fallback=session.get("language") or "en",
+    )
+
+    clinic_id = session.get("clinic_id")
+    current_state = session.get("current_state")
+
+    rules = get_cached_local_parser_rules(
+        clinic_id=clinic_id,
+        language=language,
+    )
+
+    best_match = None
+
+    for rule in rules:
+        rule_state = rule.get("current_state")
+
+        if rule_state and rule_state != current_state:
+            continue
+
+        phrase = rule.get("phrase") or ""
+        match_type = rule.get("match_type") or "contains"
+
+        if local_rule_matches(text, phrase, match_type):
+            best_match = rule
+            break
+
+    if not best_match:
+        log_timing(
+            "Local classify_simple_turn_locally",
+            local_start_ms,
+            f"no_match language={language} state={current_state}",
+        )
+        return None
+
+    parsed = build_parsed_from_local_rule(
+        rule=best_match,
+        caller_text=caller_text,
+        session=session,
+        language=language,
+    )
+
+    log_timing(
+        "Local classify_simple_turn_locally",
+        local_start_ms,
+        f"intent={parsed.get('intent')} phrase={best_match.get('phrase')}",
+    )
+
+    return parsed
 # ---------------------------------------------------------------------
 # XML / Twilio helpers
 # ---------------------------------------------------------------------
@@ -670,7 +894,6 @@ def handle_state_transition(
                 "current_state": "front_desk_followup",
                 "pending_question": None,
                 "urgency": "urgent",
-                "needs_front_desk_followup": True,
                 "last_message": response_text,
                 "unclear_count": unclear_count,
             },
@@ -1294,17 +1517,32 @@ async def twilio_stateful_turn(request: Request):
         f"doctor_count={len(doctors)}",
     )
 
-    classifier_start_ms = now_ms()
-    parsed = await classify_caller_turn_with_openai(
-        caller_text=caller_text,
-        call_state=session,
-        doctors=doctors,
-    )
+    local_classifier_start_ms = now_ms()
+    parsed = classify_simple_turn_locally(caller_text, session)
     log_timing(
-        "OpenAI classify_caller_turn_with_openai",
-        classifier_start_ms,
-        f"intent={parsed.get('intent')} confidence={parsed.get('confidence')}",
+        "Local parser total decision",
+        local_classifier_start_ms,
+        f"matched={bool(parsed)}",
     )
+
+    if not parsed:
+        classifier_start_ms = now_ms()
+        parsed = await classify_caller_turn_with_openai(
+            caller_text=caller_text,
+            call_state=session,
+            doctors=doctors,
+        )
+        log_timing(
+            "OpenAI classify_caller_turn_with_openai",
+            classifier_start_ms,
+            f"intent={parsed.get('intent')} confidence={parsed.get('confidence')}",
+        )
+    else:
+        print(
+            f"[LOCAL_PARSER] used local parser "
+            f"intent={parsed.get('intent')} "
+            f"confidence={parsed.get('confidence')}"
+        )
 
     transition_start_ms = now_ms()
     transition = handle_state_transition(
