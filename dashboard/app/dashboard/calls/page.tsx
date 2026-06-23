@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import DashboardShell from "@/components/layout/DashboardShell";
@@ -108,6 +108,27 @@ function getFilterTitle(filter: string | null) {
 }
 
 export default function CallsPage() {
+  return (
+    <Suspense fallback={<CallsPageLoading />}>
+      <CallsPageContent />
+    </Suspense>
+  );
+}
+
+function CallsPageLoading() {
+  return (
+    <DashboardShell
+      title="Calls"
+      description="Review AI call extractions, incomplete calls, and extracted appointment details."
+    >
+      <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-medium text-slate-500">
+        Loading calls...
+      </div>
+    </DashboardShell>
+  );
+}
+
+function CallsPageContent() {
   const searchParams = useSearchParams();
   const filter = searchParams.get("filter");
 

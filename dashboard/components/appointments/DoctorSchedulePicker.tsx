@@ -607,6 +607,7 @@ export default function DoctorSchedulePicker({
         throw new Error(updateRequestError.message);
       }
 
+
       await createAppointmentFromRequest({
         clinicId,
         appointmentRequestId: request.id,
@@ -618,14 +619,15 @@ export default function DoctorSchedulePicker({
           : null,
         doctorId: selectedDoctorId,
         serviceCategoryId: selectedServiceId,
-        serviceName: editableServiceName.trim()
-          ? editableServiceName.trim()
-          : null,
-        startTime: selectedSlot.startDateTime.toISOString(),
-        endTime: selectedSlot.endDateTime.toISOString(),
+        serviceName: null,
+        reason: request.reason || null,
+        urgency: request.urgency || "normal",
+        startTime: selectedSlot.startTime,
+        endTime: selectedSlot.endTime,
         durationMinutes,
         notes: notes.trim() ? notes.trim() : null,
       });
+
 
       setIsConfirming(false);
       onConfirmed();

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import DashboardShell from "@/components/layout/DashboardShell";
@@ -71,6 +71,27 @@ function getStatusTitle(status: string | null) {
 }
 
 export default function RequestsPage() {
+  return (
+    <Suspense fallback={<RequestsPageLoading />}>
+      <RequestsPageContent />
+    </Suspense>
+  );
+}
+
+function RequestsPageLoading() {
+  return (
+    <DashboardShell
+      title="Appointment Requests"
+      description="Review and manage appointment requests created by the AI receptionist."
+    >
+      <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-medium text-slate-500">
+        Loading requests...
+      </div>
+    </DashboardShell>
+  );
+}
+
+function RequestsPageContent() {
   const searchParams = useSearchParams();
   const statusFilter = searchParams.get("status");
 
