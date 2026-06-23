@@ -77,8 +77,8 @@ def twiml_gather(
     message: str,
     action_url: str,
     language: str = "en-US",
-    timeout: int = 5,
-    speech_timeout: str = "auto",
+    timeout: int = 3,
+    speech_timeout: str = "1",
 ) -> Response:
     safe_message = xml_escape(message)
     safe_action = xml_escape(action_url)
