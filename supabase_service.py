@@ -1519,3 +1519,54 @@ def get_local_parser_rules(clinic_id: str | None = None, language: str | None = 
     except Exception as e:
         print(f"Error loading local parser rules: {e}")
         return []
+    
+def get_active_service_keywords_for_clinic(clinic_id: str | None):
+    if not supabase:
+        print("Supabase client is not initialized")
+        return []
+
+    if not clinic_id:
+        print("Cannot load service keywords: missing clinic_id")
+        return []
+
+    try:
+        result = (
+            supabase.table("service_keywords")
+            .select(
+                """
+                id,
+                keyword,
+                language,
+                match_type,
+                category_id,
+                service_categories (
+                    id,
+                    name,
+                    canonical_reason,
+                    default_duration_minutes,
+                    default_urgency,
+                    is_active
+                )
+                """
+            )
+            .eq("clinic_id", clinic_id)
+            .eq("is_active", True)
+            .execute()
+        )
+
+        rows = result.data or []
+
+        active_rows = []
+        for row in rows:
+            category = row.get("service_categories") or {}
+
+            if category.get("is_active") is False:
+                continue
+
+            active_rows.append(row)
+
+        return active_rows
+
+    except Exception as e:
+        print(f"Error loading active service keywords: {e}")
+        return []

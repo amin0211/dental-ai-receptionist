@@ -4,6 +4,7 @@ import json
 import asyncio
 import time
 from typing import Any
+from rapidfuzz import fuzz, process
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
@@ -28,6 +29,7 @@ from supabase_service import (
     update_call_session,
     save_call_turn_log,
     get_local_parser_rules,
+    get_active_service_keywords_for_clinic,
 )
 
 app = FastAPI()
@@ -70,7 +72,8 @@ def log_timing(label: str, start_ms: float, extra: str = ""):
 
 LOCAL_RULE_CACHE: dict[str, dict] = {}
 LOCAL_RULE_CACHE_TTL_SECONDS = int(os.environ.get("LOCAL_RULE_CACHE_TTL_SECONDS", "300"))
-
+SERVICE_KEYWORD_CACHE: dict[str, dict] = {}
+SERVICE_KEYWORD_CACHE_TTL_SECONDS = int(os.environ.get("SERVICE_KEYWORD_CACHE_TTL_SECONDS", "300"))
 
 def normalize_parser_text(text: str | None) -> str:
     value = (text or "").strip().lower()
@@ -293,6 +296,245 @@ def classify_simple_turn_locally(caller_text: str, session: dict) -> dict | None
 
     return parsed
 
+
+def get_cached_service_keywords(clinic_id: str | None) -> list[dict]:
+    if not clinic_id:
+        return []
+
+    cache_key = clinic_id
+    now = time.time()
+
+    cached = SERVICE_KEYWORD_CACHE.get(cache_key)
+
+    if cached and now - cached.get("loaded_at", 0) < SERVICE_KEYWORD_CACHE_TTL_SECONDS:
+        return cached.get("keywords", [])
+
+    load_start_ms = now_ms()
+
+    keywords = get_active_service_keywords_for_clinic(clinic_id)
+
+    SERVICE_KEYWORD_CACHE[cache_key] = {
+        "loaded_at": now,
+        "keywords": keywords,
+    }
+
+    log_timing(
+        "Supabase load service_keywords into cache",
+        load_start_ms,
+        f"clinic_id={clinic_id} keyword_count={len(keywords)}",
+    )
+
+    return keywords
+
+
+def normalize_service_text(text: str | None) -> str:
+    value = normalize_parser_text(text)
+
+    replacements = {
+        "2": "two",
+        "too": "two",
+        "tooths": "tooth",
+        "toothes": "tooth",
+        "teefs": "teeth",
+    }
+
+    words = value.split()
+    normalized_words = [replacements.get(word, word) for word in words]
+
+    return " ".join(normalized_words)
+
+
+def build_service_candidate(row: dict) -> dict | None:
+    category = row.get("service_categories") or {}
+
+    if not category:
+        return None
+
+    return {
+        "service_category_id": category.get("id") or row.get("category_id"),
+        "service_category_name": category.get("name"),
+        "canonical_reason": category.get("canonical_reason"),
+        "duration_minutes": category.get("default_duration_minutes") or 30,
+        "urgency": category.get("default_urgency") or "normal",
+        "matched_keyword": row.get("keyword"),
+    }
+
+
+def resolve_service_locally(caller_text: str, clinic_id: str | None) -> dict:
+    resolver_start_ms = now_ms()
+
+    raw_text = caller_text or ""
+    normalized_text = normalize_service_text(raw_text)
+
+    if not normalized_text or not clinic_id:
+        return {
+            "status": "no_match",
+            "confidence": 0.0,
+            "raw_text": raw_text,
+            "matched_keyword": None,
+            "service": None,
+        }
+
+    keyword_rows = get_cached_service_keywords(clinic_id)
+
+    if not keyword_rows:
+        log_timing(
+            "Local service resolver",
+            resolver_start_ms,
+            "status=no_match reason=no_keywords",
+        )
+
+        return {
+            "status": "no_match",
+            "confidence": 0.0,
+            "raw_text": raw_text,
+            "matched_keyword": None,
+            "service": None,
+        }
+
+    # 1) exact/contains pass
+    for row in keyword_rows:
+        keyword = row.get("keyword") or ""
+        normalized_keyword = normalize_service_text(keyword)
+        match_type = row.get("match_type") or "contains"
+
+        if not normalized_keyword:
+            continue
+
+        if match_type == "exact":
+            matched = normalized_text == normalized_keyword
+        else:
+            matched = normalized_keyword in normalized_text
+
+        if matched:
+            service = build_service_candidate(row)
+
+            log_timing(
+                "Local service resolver",
+                resolver_start_ms,
+                f"status=exact keyword={keyword} service={service.get('service_category_name') if service else None}",
+            )
+
+            return {
+                "status": "exact",
+                "confidence": 0.98,
+                "raw_text": raw_text,
+                "matched_keyword": keyword,
+                "service": service,
+            }
+
+    # 2) fuzzy pass
+    best = None
+    second_best = None
+
+    for row in keyword_rows:
+        keyword = row.get("keyword") or ""
+        normalized_keyword = normalize_service_text(keyword)
+
+        if not normalized_keyword:
+            continue
+
+        score_a = fuzz.token_set_ratio(normalized_text, normalized_keyword)
+        score_b = fuzz.partial_ratio(normalized_text, normalized_keyword)
+        score = max(score_a, score_b)
+
+        candidate = {
+            "score": float(score),
+            "row": row,
+            "keyword": keyword,
+        }
+
+        if best is None or candidate["score"] > best["score"]:
+            second_best = best
+            best = candidate
+        elif second_best is None or candidate["score"] > second_best["score"]:
+            second_best = candidate
+
+    if not best:
+        log_timing(
+            "Local service resolver",
+            resolver_start_ms,
+            "status=no_match reason=no_best",
+        )
+
+        return {
+            "status": "no_match",
+            "confidence": 0.0,
+            "raw_text": raw_text,
+            "matched_keyword": None,
+            "service": None,
+        }
+
+    best_score = float(best["score"])
+    second_score = float(second_best["score"]) if second_best else 0.0
+    score_gap = best_score - second_score
+
+    best_row = best["row"]
+    best_keyword = best["keyword"]
+    service = build_service_candidate(best_row)
+
+    if best_score >= 90 and score_gap >= 5:
+        status = "exact"
+        confidence = min(best_score / 100, 0.98)
+    elif best_score >= 74 and score_gap >= 4:
+        status = "fuzzy_confirm"
+        confidence = best_score / 100
+    else:
+        status = "no_match"
+        confidence = best_score / 100
+
+    log_timing(
+        "Local service resolver",
+        resolver_start_ms,
+        (
+            f"status={status} score={best_score:.1f} "
+            f"second={second_score:.1f} gap={score_gap:.1f} "
+            f"keyword={best_keyword} service={service.get('service_category_name') if service else None}"
+        ),
+    )
+
+    if status == "no_match":
+        return {
+            "status": "no_match",
+            "confidence": confidence,
+            "raw_text": raw_text,
+            "matched_keyword": best_keyword,
+            "service": None,
+        }
+
+    return {
+        "status": status,
+        "confidence": confidence,
+        "raw_text": raw_text,
+        "matched_keyword": best_keyword,
+        "service": service,
+    }
+
+
+def parsed_from_exact_service(service_result: dict, session: dict) -> dict:
+    service = service_result.get("service") or {}
+
+    return {
+        "intent": "provide_reason",
+        "reason": service_result.get("raw_text"),
+        "reason_is_specific_enough": True,
+        "doctor_name": None,
+        "preferred_date_raw": None,
+        "date_confirmation": None,
+        "slot_choice": None,
+        "wants_repeat": False,
+        "is_emergency": False,
+        "is_unclear": False,
+        "language": session.get("language") or "en",
+        "confidence": float(service_result.get("confidence") or 0.98),
+        "notes": (
+            "Matched service locally. "
+            f"service={service.get('service_category_name')} "
+            f"keyword={service_result.get('matched_keyword')} "
+            f"status={service_result.get('status')}"
+        ),
+    }
+
 def classify_service_reason_locally(caller_text: str, session: dict) -> dict | None:
     local_start_ms = now_ms()
 
@@ -446,6 +688,11 @@ def template_ask_reason() -> str:
 
 def template_clarify_reason() -> str:
     return "Can you briefly tell me what kind of dental problem it is?"
+
+def template_confirm_service(service_name: str | None) -> str:
+    if service_name:
+        return f"I may have heard {service_name}. Is that correct?"
+    return "I may have heard the dental issue, but I want to confirm. Is that correct?"
 
 
 def template_confirm_date(date_text: str) -> str:
@@ -936,6 +1183,96 @@ def handle_state_transition(
             "fallback_reason": None,
         }
 
+    if state_before == "confirm_service":
+        if intent == "confirm_date":
+            reason = session.get("pending_reason_raw") or session.get("pending_canonical_reason")
+
+            session_for_booking = dict(session)
+            session_for_booking["reason"] = reason
+            session_for_booking["service_category_id"] = session.get("pending_service_category_id")
+            session_for_booking["service_category_name"] = session.get("pending_service_category_name")
+            session_for_booking["canonical_reason"] = session.get("pending_canonical_reason")
+            session_for_booking["duration_minutes"] = session.get("pending_duration_minutes")
+
+            booking_result = get_booking_options_for_ai(
+                clinic_id=session.get("clinic_id"),
+                doctors=doctors,
+                doctor_name=session.get("preferred_doctor_name"),
+                reason=reason,
+                preferred_date_raw=session.get("preferred_date_raw"),
+                preferred_date_confirmed=bool(session.get("preferred_date_confirmed")),
+            )
+
+            offer = build_offer_from_booking_result(session_for_booking, booking_result)
+
+            offer["updates"].update(
+                {
+                    "reason": reason,
+                    "reason_is_specific_enough": True,
+                    "service_category_id": session.get("pending_service_category_id"),
+                    "service_category_name": session.get("pending_service_category_name"),
+                    "canonical_reason": session.get("pending_canonical_reason"),
+                    "duration_minutes": session.get("pending_duration_minutes"),
+                    "pending_service_category_id": None,
+                    "pending_service_category_name": None,
+                    "pending_canonical_reason": None,
+                    "pending_duration_minutes": None,
+                    "pending_reason_raw": None,
+                    "pending_service_confidence": None,
+                    "pending_service_matched_keyword": None,
+                    "unclear_count": unclear_count,
+                }
+            )
+
+            return {
+                "response_text": offer["response_text"],
+                "updates": offer["updates"],
+                "state_after": offer["updates"].get("current_state", state_before),
+                "action": "service_confirmed_find_slots",
+                "fallback_triggered": False,
+                "fallback_reason": None,
+            }
+
+        if intent == "reject_date":
+            response_text = template_clarify_reason()
+
+            return {
+                "response_text": response_text,
+                "updates": {
+                    "current_state": "clarify_reason",
+                    "pending_question": "specific_reason",
+                    "pending_service_category_id": None,
+                    "pending_service_category_name": None,
+                    "pending_canonical_reason": None,
+                    "pending_duration_minutes": None,
+                    "pending_reason_raw": None,
+                    "pending_service_confidence": None,
+                    "pending_service_matched_keyword": None,
+                    "last_message": response_text,
+                    "unclear_count": unclear_count,
+                },
+                "state_after": "clarify_reason",
+                "action": "service_rejected_clarify_reason",
+                "fallback_triggered": False,
+                "fallback_reason": None,
+            }
+
+        response_text = session.get("last_message") or template_confirm_service(
+            session.get("pending_service_category_name")
+        )
+
+        return {
+            "response_text": response_text,
+            "updates": {
+                "last_message": response_text,
+                "unclear_count": unclear_count,
+            },
+            "state_after": "confirm_service",
+            "action": "repeat_service_confirmation",
+            "fallback_triggered": False,
+            "fallback_reason": None,
+        }
+    
     if intent == "emergency" or parsed.get("is_emergency"):
         response_text = template_emergency()
         return {
@@ -1567,17 +1904,71 @@ async def twilio_stateful_turn(request: Request):
         f"doctor_count={len(doctors)}",
     )
 
+    transition = None
+
     local_classifier_start_ms = now_ms()
 
     parsed = classify_simple_turn_locally(caller_text, session)
+    service_resolution = None
 
     if not parsed:
-        parsed = classify_service_reason_locally(caller_text, session)
+        service_resolution = resolve_service_locally(
+            caller_text=caller_text,
+            clinic_id=session.get("clinic_id"),
+        )
+
+        if service_resolution.get("status") == "exact":
+            parsed = parsed_from_exact_service(service_resolution, session)
+
+        elif service_resolution.get("status") == "fuzzy_confirm":
+            service = service_resolution.get("service") or {}
+            response_text = template_confirm_service(service.get("service_category_name"))
+
+            transition = {
+                "response_text": response_text,
+                "updates": {
+                    "current_state": "confirm_service",
+                    "pending_question": "service_confirmation",
+                    "pending_service_category_id": service.get("service_category_id"),
+                    "pending_service_category_name": service.get("service_category_name"),
+                    "pending_canonical_reason": service.get("canonical_reason"),
+                    "pending_duration_minutes": service.get("duration_minutes"),
+                    "pending_reason_raw": service_resolution.get("raw_text"),
+                    "pending_service_confidence": service_resolution.get("confidence"),
+                    "pending_service_matched_keyword": service_resolution.get("matched_keyword"),
+                    "last_message": response_text,
+                    "unclear_count": 0,
+                },
+                "state_after": "confirm_service",
+                "action": "confirm_fuzzy_service",
+                "fallback_triggered": False,
+                "fallback_reason": None,
+            }
+
+            parsed = {
+                "intent": "provide_reason",
+                "reason": service_resolution.get("raw_text"),
+                "reason_is_specific_enough": False,
+                "doctor_name": None,
+                "preferred_date_raw": None,
+                "date_confirmation": None,
+                "slot_choice": None,
+                "wants_repeat": False,
+                "is_emergency": False,
+                "is_unclear": False,
+                "language": session.get("language") or "en",
+                "confidence": float(service_resolution.get("confidence") or 0.75),
+                "notes": (
+                    "Fuzzy service match requires confirmation. "
+                    f"service={service.get('service_category_name')} "
+                    f"keyword={service_resolution.get('matched_keyword')}"
+                ),
+            }
 
     log_timing(
         "Local parser total decision",
         local_classifier_start_ms,
-        f"matched={bool(parsed)}",
+        f"matched={bool(parsed)} service_status={service_resolution.get('status') if service_resolution else None}",
     )
 
     if not parsed:
@@ -1599,18 +1990,24 @@ async def twilio_stateful_turn(request: Request):
             f"confidence={parsed.get('confidence')}"
         )
 
-        
-    transition_start_ms = now_ms()
-    transition = handle_state_transition(
-        session=session,
-        parsed=parsed,
-        doctors=doctors,
-    )
-    log_timing(
-        "Backend handle_state_transition",
-        transition_start_ms,
-        f"action={transition.get('action')} state_after={transition.get('state_after')}",
-    )
+    if transition is None:
+        transition_start_ms = now_ms()
+        transition = handle_state_transition(
+            session=session,
+            parsed=parsed,
+            doctors=doctors,
+        )
+        log_timing(
+            "Backend handle_state_transition",
+            transition_start_ms,
+            f"action={transition.get('action')} state_after={transition.get('state_after')}",
+        )
+    else:
+        print(
+            f"[STATE_MACHINE] using prebuilt transition "
+            f"action={transition.get('action')} "
+            f"state_after={transition.get('state_after')}"
+        )
 
     updates = transition.get("updates") or {}
     response_text = transition.get("response_text") or template_ask_reason()
