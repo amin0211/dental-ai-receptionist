@@ -26,6 +26,8 @@ type RequestForSchedule = {
   urgency: string | null;
   doctor_id?: string | null;
   preferred_doctor_name: string | null;
+  preferred_date_raw: string | null;
+  preferred_time_raw: string | null;
   service_category_id?: string | null;
   service_category_name?: string | null;
   duration_minutes?: number | null;
@@ -149,6 +151,117 @@ function getInitialWeekStartFromAppointment(appointment?: Appointment | null) {
   return getWeekStart(new Date(appointment.start_time));
 }
 
+function normalizePreferredDate(value?: string | null) {
+  if (!value) return "";
+
+  const trimmed = value.trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const fullDateMatch = trimmed.match(/^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})$/);
+
+  if (fullDateMatch) {
+    return `${fullDateMatch[1]}-${fullDateMatch[2].padStart(
+      2,
+      "0"
+    )}-${fullDateMatch[3].padStart(2, "0")}`;
+  }
+
+  const monthDayMatch = trimmed.match(
+    /^(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+(\d{1,2})$/i
+  );
+
+  if (monthDayMatch) {
+    const monthMap: Record<string, number> = {
+      jan: 1,
+      january: 1,
+      feb: 2,
+      february: 2,
+      mar: 3,
+      march: 3,
+      apr: 4,
+      april: 4,
+      may: 5,
+      jun: 6,
+      june: 6,
+      jul: 7,
+      july: 7,
+      aug: 8,
+      august: 8,
+      sep: 9,
+      sept: 9,
+      september: 9,
+      oct: 10,
+      october: 10,
+      nov: 11,
+      november: 11,
+      dec: 12,
+      december: 12,
+    };
+
+    const monthName = monthDayMatch[1].toLowerCase();
+    const month = String(monthMap[monthName]).padStart(2, "0");
+    const day = monthDayMatch[2].padStart(2, "0");
+    const year = new Date().getFullYear();
+
+    return `${year}-${month}-${day}`;
+  }
+
+  return "";
+}
+
+function normalizePreferredTime(value?: string | null) {
+  if (!value) return "";
+
+  const trimmed = value.trim().toLowerCase();
+  const timeRangeStart = trimmed.split("-")[0].trim();
+
+  const twentyFourHourMatch = timeRangeStart.match(/^(\d{1,2}):(\d{2})/);
+
+  if (twentyFourHourMatch && !timeRangeStart.includes("am") && !timeRangeStart.includes("pm")) {
+    return `${twentyFourHourMatch[1].padStart(2, "0")}:${twentyFourHourMatch[2]}`;
+  }
+
+  const twelveHourMatch = timeRangeStart.match(
+    /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/
+  );
+
+  if (twelveHourMatch) {
+    let hours = Number(twelveHourMatch[1]);
+    const minutes = twelveHourMatch[2] || "00";
+    const period = twelveHourMatch[3];
+
+    if (period === "pm" && hours !== 12) hours += 12;
+    if (period === "am" && hours === 12) hours = 0;
+
+    return `${String(hours).padStart(2, "0")}:${minutes}`;
+  }
+
+  return "";
+}
+
+function getInitialWeekStart({
+  appointment,
+  request,
+}: {
+  appointment?: Appointment | null;
+  request?: RequestForSchedule;
+}) {
+  if (appointment) {
+    return getWeekStart(new Date(appointment.start_time));
+  }
+
+  const preferredDate = normalizePreferredDate(request?.preferred_date_raw);
+
+  if (preferredDate) {
+    return getWeekStart(new Date(`${preferredDate}T00:00:00`));
+  }
+
+  return getWeekStart(new Date());
+}
+
 function getLocalDateStringFromIso(value: string) {
   const date = new Date(value);
   const year = date.getFullYear();
@@ -196,7 +309,7 @@ export default function AppointmentScheduleEditor({
   );
 
   const [weekStart, setWeekStart] = useState(
-    getInitialWeekStartFromAppointment(appointment)
+    getInitialWeekStart({ appointment, request })
   );
 
   const [rules, setRules] = useState<CalendarAvailabilityRule[]>([]);
@@ -351,6 +464,11 @@ export default function AppointmentScheduleEditor({
     appointment?.id,
   ]);
 
+  const allSlotsForWeek = useMemo(() => {
+  return Object.values(slotsByDate).flat();
+  }, [slotsByDate]);
+
+  
   useEffect(() => {
     async function loadInitialData() {
       try {
@@ -529,6 +647,28 @@ export default function AppointmentScheduleEditor({
       bookedAppointment: null,
     });
   }, [mode, appointment]);
+
+  useEffect(() => {
+  if (mode !== "confirm") return;
+  if (!request) return;
+  if (selectedSlot) return;
+  if (allSlotsForWeek.length === 0) return;
+
+  const preferredDate = normalizePreferredDate(request.preferred_date_raw);
+  const preferredTime = normalizePreferredTime(request.preferred_time_raw);
+
+  if (!preferredDate || !preferredTime) return;
+
+  const matchedSlot = allSlotsForWeek.find(
+    (slot) =>
+      !slot.isBooked &&
+      slot.date === preferredDate &&
+      slot.startTime === preferredTime
+  );
+  if (!matchedSlot) return;
+
+  setSelectedSlot(matchedSlot);
+}, [mode, request, allSlotsForWeek, selectedSlot]);
 
   useEffect(() => {
     async function loadSchedule() {
@@ -1041,15 +1181,15 @@ export default function AppointmentScheduleEditor({
                             onClick={() => setSelectedSlot(slot)}
                             className={`w-full rounded-xl border px-3 py-2 text-left text-xs transition ${
                               isSelected
-                                ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                                ? "border-emerald-600 bg-emerald-100 text-emerald-950 ring-2 ring-emerald-500"
                                 : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50"
-                            }`}
+                            }`}                            
                           >
                             <div className="font-bold">
                               {slot.startTime} - {slot.endTime}
                             </div>
                             <div className="mt-1">
-                              {isSelected ? "Selected" : "Available"}
+                              {isSelected ? "Selected from AI request" : "Available"}
                             </div>
                           </button>
                         );

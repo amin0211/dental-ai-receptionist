@@ -441,14 +441,7 @@ export default function DashboardPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <Link
-                href="/dashboard/appointments"
-                className="rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-blue-700"
-              >
-                Open appointments
-              </Link>
-            </div>
+
           </div>
         </div>
 
