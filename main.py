@@ -292,6 +292,56 @@ def classify_simple_turn_locally(caller_text: str, session: dict) -> dict | None
     )
 
     return parsed
+
+def classify_service_reason_locally(caller_text: str, session: dict) -> dict | None:
+    local_start_ms = now_ms()
+
+    text = (caller_text or "").strip()
+
+    if not text:
+        return None
+
+    clinic_id = session.get("clinic_id")
+
+    service_match = match_service_from_transcript(
+        clinic_id,
+        text,
+    )
+
+    if not service_match:
+        log_timing(
+            "Local service keyword match",
+            local_start_ms,
+            "matched=False",
+        )
+        return None
+
+    parsed = {
+        "intent": "provide_reason",
+        "reason": caller_text,
+        "reason_is_specific_enough": True,
+        "doctor_name": None,
+        "preferred_date_raw": None,
+        "date_confirmation": None,
+        "slot_choice": None,
+        "wants_repeat": False,
+        "is_emergency": False,
+        "is_unclear": False,
+        "language": session.get("language") or "en",
+        "confidence": 0.97,
+        "notes": f"Matched service keyword locally: {service_match}",
+    }
+
+    log_timing(
+        "Local service keyword match",
+        local_start_ms,
+        f"matched=True service={service_match.get('category_name') or service_match.get('canonical_reason')}",
+    )
+
+    return parsed
+
+
+
 # ---------------------------------------------------------------------
 # XML / Twilio helpers
 # ---------------------------------------------------------------------
@@ -1518,7 +1568,12 @@ async def twilio_stateful_turn(request: Request):
     )
 
     local_classifier_start_ms = now_ms()
+
     parsed = classify_simple_turn_locally(caller_text, session)
+
+    if not parsed:
+        parsed = classify_service_reason_locally(caller_text, session)
+
     log_timing(
         "Local parser total decision",
         local_classifier_start_ms,
@@ -1544,6 +1599,7 @@ async def twilio_stateful_turn(request: Request):
             f"confidence={parsed.get('confidence')}"
         )
 
+        
     transition_start_ms = now_ms()
     transition = handle_state_transition(
         session=session,
