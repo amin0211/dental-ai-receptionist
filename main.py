@@ -2,6 +2,7 @@ import os
 from urllib.parse import urlparse
 import json
 import asyncio
+import time
 from typing import Any
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -53,6 +54,18 @@ PUBLIC_WS_URL = os.environ.get(
 ).rstrip("/")
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+
+def now_ms() -> float:
+    return time.perf_counter() * 1000
+
+
+def log_timing(label: str, start_ms: float, extra: str = ""):
+    elapsed = now_ms() - start_ms
+    if extra:
+        print(f"[TIMING] {label}: {elapsed:.1f}ms | {extra}")
+    else:
+        print(f"[TIMING] {label}: {elapsed:.1f}ms")
 
 
 # ---------------------------------------------------------------------
@@ -201,6 +214,13 @@ def template_emergency() -> str:
     )
 
 
+def format_slot_display_fallback(slot: dict) -> str:
+    doctor_name = slot.get("doctor_name") or "the dentist"
+    date_text = slot.get("date") or ""
+    start_time = slot.get("start_time") or ""
+    return f"{doctor_name} on {date_text} at {start_time}".strip()
+
+
 def format_slot_offer(slots: list[dict]) -> str:
     if not slots:
         return template_no_slots_found()
@@ -220,13 +240,6 @@ def format_slot_offer(slots: list[dict]) -> str:
         f"I found two options: {first_display}, or {second_display}. "
         "Which one works better?"
     )
-
-
-def format_slot_display_fallback(slot: dict) -> str:
-    doctor_name = slot.get("doctor_name") or "the dentist"
-    date_text = slot.get("date") or ""
-    start_time = slot.get("start_time") or ""
-    return f"{doctor_name} on {date_text} at {start_time}".strip()
 
 
 def template_final_noted(slot: dict) -> str:
@@ -302,43 +315,21 @@ async def classify_caller_turn_with_openai(
                     "unclear",
                 ],
             },
-            "reason": {
-                "type": ["string", "null"],
-            },
-            "reason_is_specific_enough": {
-                "type": "boolean",
-            },
-            "doctor_name": {
-                "type": ["string", "null"],
-            },
-            "preferred_date_raw": {
-                "type": ["string", "null"],
-            },
-            "date_confirmation": {
-                "type": ["boolean", "null"],
-            },
+            "reason": {"type": ["string", "null"]},
+            "reason_is_specific_enough": {"type": "boolean"},
+            "doctor_name": {"type": ["string", "null"]},
+            "preferred_date_raw": {"type": ["string", "null"]},
+            "date_confirmation": {"type": ["boolean", "null"]},
             "slot_choice": {
                 "type": ["integer", "null"],
                 "description": "1 for first option, 2 for second option, or null.",
             },
-            "wants_repeat": {
-                "type": "boolean",
-            },
-            "is_emergency": {
-                "type": "boolean",
-            },
-            "is_unclear": {
-                "type": "boolean",
-            },
-            "language": {
-                "type": ["string", "null"],
-            },
-            "confidence": {
-                "type": "number",
-            },
-            "notes": {
-                "type": ["string", "null"],
-            },
+            "wants_repeat": {"type": "boolean"},
+            "is_emergency": {"type": "boolean"},
+            "is_unclear": {"type": "boolean"},
+            "language": {"type": ["string", "null"]},
+            "confidence": {"type": "number"},
+            "notes": {"type": ["string", "null"]},
         },
         "required": [
             "intent",
@@ -392,14 +383,8 @@ async def classify_caller_turn_with_openai(
         response = await openai_client.responses.create(
             model=OPENAI_EXTRACTION_MODEL,
             input=[
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": caller_text or "",
-                },
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": caller_text or ""},
             ],
             text={
                 "format": {
@@ -616,7 +601,6 @@ def handle_state_transition(
 ) -> dict:
     state_before = session.get("current_state") or "collect_reason"
     intent = parsed.get("intent") or "unclear"
-    confidence = float(parsed.get("confidence") or 0)
 
     unclear_count = int(session.get("unclear_count") or 0)
 
@@ -1049,7 +1033,7 @@ def handle_state_transition(
 
 
 # ---------------------------------------------------------------------
-# Stateful low-cost Twilio flow
+# Stateful low-cost Twilio flow with timing logs
 # ---------------------------------------------------------------------
 
 @app.post("/twilio/voice")
@@ -1059,15 +1043,30 @@ async def twilio_voice(request: Request):
 
 @app.post("/twilio/voice-stateful")
 async def twilio_voice_stateful(request: Request):
+    request_start_ms = now_ms()
+    print("[TIMING] /twilio/voice-stateful received")
+
     form = await request.form()
 
     caller = normalize_phone(form.get("From"))
     to_number = normalize_phone(form.get("To"))
     call_sid = form.get("CallSid") or ""
 
+    print(
+        f"[VOICE_START] call_sid={call_sid} "
+        f"from={caller} to={to_number}"
+    )
+
+    clinic_lookup_start_ms = now_ms()
     clinic = find_clinic_by_twilio_number(to_number)
     clinic_id = clinic["id"] if clinic else None
+    log_timing(
+        "Supabase find_clinic_by_twilio_number",
+        clinic_lookup_start_ms,
+        f"clinic_found={bool(clinic)} clinic_id={clinic_id}",
+    )
 
+    save_call_start_ms = now_ms()
     saved_call = save_call_to_db(
         clinic_id=clinic_id,
         twilio_call_sid=call_sid,
@@ -1078,12 +1077,24 @@ async def twilio_voice_stateful(request: Request):
         urgency="normal",
         summary="Stateful AI call started.",
     )
+    log_timing(
+        "Supabase save_call_to_db",
+        save_call_start_ms,
+        f"call_saved={bool(saved_call)}",
+    )
 
     call_id = saved_call["id"] if saved_call else None
 
+    session_lookup_start_ms = now_ms()
     existing_session = get_call_session_by_twilio_sid(call_sid)
+    log_timing(
+        "Supabase get_call_session_by_twilio_sid on voice start",
+        session_lookup_start_ms,
+        f"found={bool(existing_session)} call_sid={call_sid}",
+    )
 
     if not existing_session:
+        create_session_start_ms = now_ms()
         call_session = create_call_session(
             clinic_id=clinic_id,
             call_id=call_id,
@@ -1093,12 +1104,18 @@ async def twilio_voice_stateful(request: Request):
             pending_question="reason",
             language="en",
         )
+        log_timing(
+            "Supabase create_call_session",
+            create_session_start_ms,
+            f"session_created={bool(call_session)}",
+        )
     else:
         call_session = existing_session
 
     greeting = template_greeting()
 
     if call_session:
+        update_session_start_ms = now_ms()
         update_call_session(
             call_session["id"],
             {
@@ -1107,7 +1124,9 @@ async def twilio_voice_stateful(request: Request):
                 "pending_question": "reason",
             },
         )
+        log_timing("Supabase update_call_session greeting", update_session_start_ms)
 
+        save_log_start_ms = now_ms()
         save_call_turn_log(
             call_session_id=call_session["id"],
             call_id=call_id,
@@ -1122,8 +1141,15 @@ async def twilio_voice_stateful(request: Request):
             backend_action="greeting",
             backend_response=greeting,
         )
+        log_timing("Supabase save greeting call_turn_log", save_log_start_ms)
 
     action_url = f"{PUBLIC_BASE_URL}/twilio/stateful-turn"
+
+    log_timing(
+        "TOTAL /twilio/voice-stateful",
+        request_start_ms,
+        f"call_sid={call_sid} action_url={action_url}",
+    )
 
     return twiml_gather(
         message=greeting,
@@ -1134,7 +1160,12 @@ async def twilio_voice_stateful(request: Request):
 
 @app.post("/twilio/stateful-turn")
 async def twilio_stateful_turn(request: Request):
+    request_start_ms = now_ms()
+    print("[TIMING] /twilio/stateful-turn received")
+
+    form_start_ms = now_ms()
     form = await request.form()
+    log_timing("FastAPI parse request.form", form_start_ms)
 
     caller_text = str(form.get("SpeechResult") or "").strip()
     confidence = str(form.get("Confidence") or "")
@@ -1142,11 +1173,26 @@ async def twilio_stateful_turn(request: Request):
     to_number = normalize_phone(form.get("To"))
     call_sid = form.get("CallSid") or ""
 
+    print(
+        f"[TURN] call_sid={call_sid} "
+        f"from={caller} to={to_number} "
+        f"speech='{caller_text}' "
+        f"twilio_confidence={confidence}"
+    )
+
     action_url = f"{PUBLIC_BASE_URL}/twilio/stateful-turn"
 
+    session_lookup_start_ms = now_ms()
     session = get_call_session_by_twilio_sid(call_sid)
+    log_timing(
+        "Supabase get_call_session_by_twilio_sid",
+        session_lookup_start_ms,
+        f"found={bool(session)} call_sid={call_sid}",
+    )
 
     if not session:
+        recovery_start_ms = now_ms()
+
         clinic = find_clinic_by_twilio_number(to_number)
         clinic_id = clinic["id"] if clinic else None
 
@@ -1171,7 +1217,19 @@ async def twilio_stateful_turn(request: Request):
             language="en",
         )
 
+        log_timing(
+            "Recovery create_call_session path",
+            recovery_start_ms,
+            f"session_created={bool(session)} clinic_id={clinic_id}",
+        )
+
     if not session:
+        log_timing(
+            "TOTAL /twilio/stateful-turn",
+            request_start_ms,
+            "return=fallback_no_session",
+        )
+
         return twiml_connect_realtime(
             caller_phone=caller,
             to_number=to_number,
@@ -1184,6 +1242,7 @@ async def twilio_stateful_turn(request: Request):
     if not caller_text:
         response_text = session.get("last_message") or template_ask_reason()
 
+        save_empty_log_start_ms = now_ms()
         save_call_turn_log(
             call_session_id=session.get("id"),
             call_id=session.get("call_id"),
@@ -1198,6 +1257,13 @@ async def twilio_stateful_turn(request: Request):
             backend_action="empty_speech_repeat_last",
             backend_response=response_text,
         )
+        log_timing("Supabase save empty speech log", save_empty_log_start_ms)
+
+        log_timing(
+            "TOTAL /twilio/stateful-turn",
+            request_start_ms,
+            "return=empty_speech_repeat_last",
+        )
 
         return twiml_gather(
             message=response_text,
@@ -1207,6 +1273,7 @@ async def twilio_stateful_turn(request: Request):
 
     existing_transcript = session.get("speech_result") or ""
 
+    update_call_start_ms = now_ms()
     update_call(
         session.get("call_id"),
         {
@@ -1217,29 +1284,56 @@ async def twilio_stateful_turn(request: Request):
             "confidence": confidence,
         },
     )
+    log_timing("Supabase update_call transcript", update_call_start_ms)
 
+    doctors_start_ms = now_ms()
     doctors = get_active_doctors_for_clinic(session.get("clinic_id"))
+    log_timing(
+        "Supabase get_active_doctors_for_clinic",
+        doctors_start_ms,
+        f"doctor_count={len(doctors)}",
+    )
 
+    classifier_start_ms = now_ms()
     parsed = await classify_caller_turn_with_openai(
         caller_text=caller_text,
         call_state=session,
         doctors=doctors,
     )
+    log_timing(
+        "OpenAI classify_caller_turn_with_openai",
+        classifier_start_ms,
+        f"intent={parsed.get('intent')} confidence={parsed.get('confidence')}",
+    )
 
+    transition_start_ms = now_ms()
     transition = handle_state_transition(
         session=session,
         parsed=parsed,
         doctors=doctors,
+    )
+    log_timing(
+        "Backend handle_state_transition",
+        transition_start_ms,
+        f"action={transition.get('action')} state_after={transition.get('state_after')}",
     )
 
     updates = transition.get("updates") or {}
     response_text = transition.get("response_text") or template_ask_reason()
     state_after = transition.get("state_after") or updates.get("current_state") or state_before
 
+    update_session_start_ms = now_ms()
     updated_session = update_call_session(
         session["id"],
         updates,
     )
+    log_timing(
+        "Supabase update_call_session",
+        update_session_start_ms,
+        f"updated={bool(updated_session)}",
+    )
+
+    save_logs_start_ms = now_ms()
 
     save_call_turn_log(
         call_session_id=session.get("id"),
@@ -1276,14 +1370,24 @@ async def twilio_stateful_turn(request: Request):
         fallback_reason=transition.get("fallback_reason"),
     )
 
+    log_timing("Supabase save_call_turn_logs", save_logs_start_ms)
+
+    update_summary_start_ms = now_ms()
     update_call(
         session.get("call_id"),
         {
             "summary": f"Stateful call state: {state_after}. Last action: {transition.get('action')}.",
         },
     )
+    log_timing("Supabase update_call summary", update_summary_start_ms)
 
     if transition.get("fallback_triggered"):
+        log_timing(
+            "TOTAL /twilio/stateful-turn",
+            request_start_ms,
+            "return=fallback_realtime",
+        )
+
         return twiml_connect_realtime(
             caller_phone=caller,
             to_number=to_number,
@@ -1292,7 +1396,19 @@ async def twilio_stateful_turn(request: Request):
         )
 
     if state_after == "done":
+        log_timing(
+            "TOTAL /twilio/stateful-turn",
+            request_start_ms,
+            "return=say_and_hangup",
+        )
+
         return twiml_say_and_hangup(response_text)
+
+    log_timing(
+        "TOTAL /twilio/stateful-turn",
+        request_start_ms,
+        "return=gather",
+    )
 
     return twiml_gather(
         message=response_text,
@@ -1341,7 +1457,6 @@ async def twilio_realtime(websocket: WebSocket):
             BASE_REALTIME_INSTRUCTIONS = (
                 "You are a concise, warm, and professional AI receptionist for Westview Dental in Vancouver, BC. "
                 "Start the call naturally by greeting the caller and asking how you can help. "
-
                 "Start in neutral English unless the caller clearly speaks another language first. "
                 "Reply in the caller's clearly detected language. "
                 "If the caller clearly speaks Persian/Farsi at any point, switch to Persian/Farsi and continue in Persian/Farsi. "
@@ -1349,7 +1464,6 @@ async def twilio_realtime(websocket: WebSocket):
                 "If the caller's speech is mixed, garbled, or unclear, do not switch languages based on that unclear fragment. "
                 "When speech is unclear, stay in the last clearly established language and ask the caller to repeat clearly. "
                 "Do not switch languages because of one random foreign-looking transcript fragment. "
-
                 "Keep replies short, natural, and receptionist-like. "
                 "Normally ask exactly one question at a time. "
                 "Do not ask for more than one new field in the same reply. "
@@ -1359,77 +1473,57 @@ async def twilio_realtime(websocket: WebSocket):
                 "If the caller asks to repeat, rephrase, say that again, or asks what you just said, repeat the last meaningful assistant message or the last offered options. "
                 "Do not treat repeat, rephrase, say that again, what did you say, or can you repeat as a date, time, doctor, reason, yes, no, or slot choice. "
                 "After repeating or rephrasing, ask the same pending question again. "
-
                 "For appointment booking, do not force the caller to choose a doctor first. "
                 "If the caller already mentions a doctor, remember that doctor preference. "
                 "If the caller does not mention a doctor, ask the reason for the dental visit first. "
                 "For reason, ask only why they want the dental visit. "
-
                 "If the reason is specific enough to map to a dental service or symptom, accept it. "
                 "If the caller only says a vague reason such as problem, issue, something is wrong, I need a dentist, or I have a concern, ask one follow-up question to clarify the dental problem before calling get_booking_options. "
                 "Examples of specific enough reasons: tooth pain, cleaning, checkup, broken tooth, filling, crown, wisdom tooth, bleeding gums, swelling, emergency, or orthodontic concern. "
                 "Do not call get_booking_options when the only reason is vague. "
-
                 "Do not ask for confirmation of the reason unless it is unclear. "
                 "If the reason is unclear, ask why they want the dental visit again. "
-
                 "After the dental reason is clear, use the get_booking_options tool to find appointment options. "
                 "The booking tool uses the treatment duration, eligible doctors, recurring doctor availability, and calendar events from the clinic database. "
                 "If the caller already mentioned a doctor, include that doctor name in the tool call. "
                 "If the caller did not mention a doctor, pass doctor_name as null. "
-
                 "If the caller gives a preferred date, repeat only the understood date and ask if it is correct before using that date for slot search. "
-
                 "Never introduce a date that was not clearly spoken by the caller or returned by the booking tool. "
                 "Never ask whether a random date is correct. "
                 "If the caller asks for repetition after slot options, repeat the same slot options exactly; do not ask for date confirmation. "
                 "If no date is currently pending confirmation, do not ask 'Is [date] correct?'. "
                 "Only confirm a date immediately after the caller clearly gave that date. "
-
                 "The date is not collected until the caller clearly confirms it after you repeat it. "
                 "If the caller says no, no matter the language, the date is rejected and not confirmed. "
                 "If the caller says no and provides a corrected date, discard the old date, repeat only the corrected date, and ask if it is correct. "
                 "If the caller says no without a clear correction, discard the old date and ask for the preferred date again. "
                 "If no preferred date is given, search for the earliest available slots. "
-
                 "Do not ask for a preferred time before using the booking tool. "
                 "The preferred time should normally come from one of the suggested appointment slots. "
-
                 "After the tool returns slot suggestions, offer exactly two suggestions when two are available. "
                 "Each suggestion must include doctor name, date, and time. "
                 "Ask which one works better. "
-
-                "After slot suggestions are given, classify the caller's next answer as one of: "
-                "select_suggested_slot, change_doctor, change_date, change_doctor_and_date, reject_without_alternative, ask_question, unclear. "
-
+                "After slot suggestions are given, classify the caller's next answer as one of: select_suggested_slot, change_doctor, change_date, change_doctor_and_date, reject_without_alternative, ask_question, unclear. "
                 "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
-
                 "Only treat the caller as selecting a suggested slot if they clearly say the time, the first one, the second one, the earlier one, the later one, that one, or clearly repeat one of the offered options. "
                 "Do not infer slot selection from unrelated words, names, greetings, foreign-language fragments, background speech, or unclear audio. "
                 "If the answer after slot suggestions is unclear, ask: Did you prefer the first option or the second option? "
                 "Do not say the request has been noted until the caller clearly chooses one suggested slot or clearly asks for front desk follow-up. "
-
                 "Never say the appointment is confirmed. "
-
                 "If the caller says a different doctor after suggestions, call get_booking_options again with the updated doctor and the same reason and date if available. "
                 "If the caller says a different date after suggestions, confirm that date first, then call get_booking_options again with the updated date. "
                 "If the caller says both a different doctor and a different date, update both, confirm the date, then call get_booking_options again. "
-
                 "If the caller rejects the suggested slots without giving a new doctor or date, ask what date they prefer. "
                 "If the caller still does not choose a slot, say the front desk will contact them to find another time. "
-
                 "If the booking tool says the requested doctor does not provide the treatment, tell the caller that briefly and offer to check another eligible doctor. "
                 "If the booking tool says no slots were found, tell the caller the front desk will contact them to find another time. "
                 "If the booking tool says the service was not matched, ask the caller to briefly repeat the reason for the dental visit. "
-
                 "If the caller's answer is garbled, mixed-language, unrelated, or low-confidence, do not convert it into a name, date, time, doctor, reason, or slot choice. "
                 "Ask the same field again in the last clearly established language. "
                 "Never turn unclear audio into a likely date such as next Tuesday, next Monday, April 22, April 15, or a likely time such as 3 PM or 9:30 AM. "
                 "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
                 "Only clear yes/no answers in the caller's language count as confirmation. "
-
                 "Do not say the request has been noted until the caller has selected one of the suggested appointment slots, or until the caller agrees that the front desk should follow up. "
-
                 "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
             )
 
@@ -1524,12 +1618,8 @@ async def twilio_realtime(websocket: WebSocket):
                                     "output_modalities": ["audio"],
                                     "audio": {
                                         "input": {
-                                            "format": {
-                                                "type": "audio/pcmu",
-                                            },
-                                            "transcription": {
-                                                "model": "gpt-4o-transcribe",
-                                            },
+                                            "format": {"type": "audio/pcmu"},
+                                            "transcription": {"model": "gpt-4o-transcribe"},
                                             "turn_detection": {
                                                 "type": "server_vad",
                                                 "threshold": 0.5,
@@ -1538,9 +1628,7 @@ async def twilio_realtime(websocket: WebSocket):
                                             },
                                         },
                                         "output": {
-                                            "format": {
-                                                "type": "audio/pcmu",
-                                            },
+                                            "format": {"type": "audio/pcmu"},
                                             "voice": "alloy",
                                         },
                                     },
@@ -1920,11 +2008,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 await openai_ws.send(
-                                    json.dumps(
-                                        {
-                                            "type": "response.create",
-                                        }
-                                    )
+                                    json.dumps({"type": "response.create"})
                                 )
 
                         elif event_type == "response.done":
@@ -2261,26 +2345,20 @@ async def extract_appointment_details_with_openai(
                     "Extract structured appointment details from this phone call transcript. "
                     "Use only information supported by the transcript. "
                     "Do not guess or invent patient names, doctor names, dates, times, or reasons. "
-
                     f"The available doctors for this clinic are: {doctor_list_text}. "
                     "If the caller says a doctor name approximately, phonetically, partially, or in another language, "
                     "match it to the closest available doctor from the provided doctor list. "
-                    "For example, Robert, Roberts, Rabert, or دکتر رابرت should match Dr. Roberts if Dr. Roberts is in the list. "
-                    "If the caller first gives an unclear doctor answer, but later clearly mentions a doctor, use the later clear doctor. "
                     "If the caller clearly says no preference, set preferred_doctor_name to 'no preference'. "
                     "If the caller did not clearly choose a doctor and did not say no preference, set preferred_doctor_name to null. "
-
                     "For date and time confirmation, mark date_confirmed or time_confirmed true if the assistant repeated that value "
                     "and the caller clearly agreed directly after that confirmation question. "
                     "Also mark them true if the assistant offered specific appointment slots and the caller clearly selected one of those slots. "
                     "Answers like yes, yeah, correct, درست, بله, آره, ja, oui count as confirmation. "
                     "Answers like no, nope, نه, いや count as rejection. "
-
                     "If the caller rejected a repeated date or time, do not save the rejected value. "
                     "If the caller corrected a value and then confirmed it, save the corrected value. "
                     "If the caller selected the first or second offered slot, extract that slot's date and time from the assistant's offered options. "
                     "If a value is unclear, garbled, mixed-language, or uncertain, set it to null and explain in notes. "
-
                     "For reason, explicit yes/no confirmation is not required if the caller's reason was understandable."
                 ),
             },
