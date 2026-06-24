@@ -184,11 +184,11 @@ function SummaryCard({
   valueClassName?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm">
       <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
         {label}
       </p>
-      <p className={`mt-2 text-2xl font-bold ${valueClassName}`}>{value}</p>
+      <p className={`mt-1 text-xl font-bold ${valueClassName}`}>{value}</p>
     </div>
   );
 }
@@ -503,7 +503,7 @@ export default function AppointmentReportPage() {
         </div>
       )}
 
-      <section className="mb-5 grid grid-cols-6 gap-3">
+      <section className="mb-5 grid max-w-6xl grid-cols-6 gap-3">
         <SummaryCard label="Total" value={summary.total} />
         <SummaryCard
           label="Confirmed"
@@ -528,7 +528,7 @@ export default function AppointmentReportPage() {
         <SummaryCard label="Minutes" value={summary.totalMinutes} />
       </section>
 
-      <section className="mb-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="mb-5 max-w-6xl rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
           <div>
             <h2 className="text-base font-bold text-slate-900">
@@ -543,7 +543,7 @@ export default function AppointmentReportPage() {
             <button
               type="button"
               onClick={loadReport}
-              className="h-10 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700"
+              className="h-9 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700"
             >
               Refresh
             </button>
@@ -551,7 +551,7 @@ export default function AppointmentReportPage() {
             <button
               type="button"
               onClick={resetFilters}
-              className="h-10 rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              className="h-9 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
               Reset
             </button>
@@ -560,7 +560,7 @@ export default function AppointmentReportPage() {
               type="button"
               onClick={exportCsv}
               disabled={filteredAppointments.length === 0}
-              className="h-10 rounded-xl border border-emerald-300 bg-emerald-50 px-4 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+              className="h-9 rounded-lg border border-emerald-300 bg-emerald-50 px-4 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Export CSV
             </button>
@@ -568,7 +568,7 @@ export default function AppointmentReportPage() {
         </div>
 
         <div className="p-5">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid max-w-5xl grid-cols-3 gap-3">
             <div>
               <label className="text-sm font-medium text-slate-700">
                 From date
@@ -578,7 +578,7 @@ export default function AppointmentReportPage() {
                 value={fromDate}
                 onChange={(event) => setFromDate(event.target.value)}
                 placeholder="YYYY-MM-DD"
-                className="mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500"
               />
             </div>
 
@@ -591,7 +591,7 @@ export default function AppointmentReportPage() {
                 value={toDate}
                 onChange={(event) => setToDate(event.target.value)}
                 placeholder="YYYY-MM-DD"
-                className="mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500"
               />
             </div>
 
@@ -604,7 +604,7 @@ export default function AppointmentReportPage() {
                 value={patientSearch}
                 onChange={(event) => setPatientSearch(event.target.value)}
                 placeholder="Search name, phone, or email"
-                className="mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500"
               />
             </div>
 
@@ -615,7 +615,7 @@ export default function AppointmentReportPage() {
               <select
                 value={selectedDoctorId}
                 onChange={(event) => setSelectedDoctorId(event.target.value)}
-                className="mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500"
               >
                 <option value="">All doctors</option>
                 {doctors.map((doctor) => (
@@ -633,7 +633,7 @@ export default function AppointmentReportPage() {
               <select
                 value={selectedServiceId}
                 onChange={(event) => setSelectedServiceId(event.target.value)}
-                className="mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500"
               >
                 <option value="">All services</option>
                 {services.map((service) => (
@@ -651,7 +651,7 @@ export default function AppointmentReportPage() {
               <select
                 value={selectedStatus}
                 onChange={(event) => setSelectedStatus(event.target.value)}
-                className="mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500"
               >
                 <option value="">All statuses</option>
                 <option value="confirmed">Confirmed</option>
@@ -668,7 +668,7 @@ export default function AppointmentReportPage() {
               <select
                 value={selectedSource}
                 onChange={(event) => setSelectedSource(event.target.value)}
-                className="mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500"
               >
                 <option value="">All sources</option>
                 <option value="dashboard">Dashboard</option>
@@ -685,7 +685,7 @@ export default function AppointmentReportPage() {
               <select
                 value={selectedUrgency}
                 onChange={(event) => setSelectedUrgency(event.target.value)}
-                className="mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500"
               >
                 <option value="">All urgency</option>
                 <option value="normal">Normal</option>
