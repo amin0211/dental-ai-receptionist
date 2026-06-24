@@ -19,6 +19,12 @@ type DashboardStats = {
   incompleteCalls: number;
 };
 
+type TodayAppointmentPatient = {
+  id: string;
+  full_name: string;
+  phone_primary: string | null;
+};
+
 type TodayAppointment = {
   id: string;
   clinic_id: string;
@@ -29,11 +35,7 @@ type TodayAppointment = {
   end_time: string;
   duration_minutes: number;
   notes: string | null;
-  patient: {
-    id: string;
-    full_name: string;
-    phone_primary: string;
-  } | null;
+  patient: TodayAppointmentPatient | null;
 };
 
 type ScheduleCellInfo = {
@@ -44,6 +46,21 @@ type ScheduleCellInfo = {
 const DAY_START_MINUTES = 8 * 60;
 const DAY_END_MINUTES = 18 * 60;
 const SLOT_MINUTES = 30;
+
+function normalizeTodayAppointments(rows: any[]): TodayAppointment[] {
+  return rows.map((row) => {
+    const patientValue = row.patient;
+
+    const patient = Array.isArray(patientValue)
+      ? patientValue[0] || null
+      : patientValue || null;
+
+    return {
+      ...row,
+      patient,
+    } as TodayAppointment;
+  });
+}
 
 function StatCard({
   title,
@@ -362,7 +379,10 @@ export default function DashboardPage() {
         incompleteCalls: incompleteCallsCount,
       });
 
-      setTodayAppointments(todayAppointmentsResult.data || []);
+      setTodayAppointments(
+        normalizeTodayAppointments(todayAppointmentsResult.data || [])
+      );
+
       setIsLoadingStats(false);
     }
 
@@ -448,8 +468,6 @@ export default function DashboardPage() {
                 {formatTodayLabel()} · 30-minute timeline · 8:00 to 18:00
               </p>
             </div>
-
-
           </div>
         </div>
 
@@ -554,7 +572,8 @@ export default function DashboardPage() {
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <p className="truncate text-xs font-black text-slate-950">
-                                {appointment.patient?.full_name || "Unknown patient"}
+                                {appointment.patient?.full_name ||
+                                  "Unknown patient"}
                               </p>
 
                               {appointment.patient?.phone_primary && (
