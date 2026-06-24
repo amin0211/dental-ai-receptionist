@@ -300,6 +300,7 @@ async def twilio_realtime(websocket: WebSocket):
     openai_usage_totals = create_openai_usage_totals()
 
     current_clinic_id = None
+    current_clinic_name = "the dental clinic"
     current_caller_phone = None
     current_doctors = []
     current_patient_candidates = []
@@ -319,7 +320,7 @@ async def twilio_realtime(websocket: WebSocket):
             print("Connected to OpenAI Realtime")
 
             base_realtime_instructions = (
-                "You are a concise, warm, and professional AI receptionist for Westview Dental in Vancouver, BC. "
+                "You are a concise, warm, and professional AI receptionist for the dental clinic. "
                 "Start the call naturally by greeting the caller, then follow the IMPORTANT PATIENT CONTEXT exactly. "
                 "Start in neutral English unless the caller clearly speaks another language first. "
                 "Reply in the caller's clearly detected language. "
@@ -396,6 +397,7 @@ async def twilio_realtime(websocket: WebSocket):
                 nonlocal stream_sid
                 nonlocal current_call_id
                 nonlocal current_clinic_id
+                nonlocal current_clinic_name
                 nonlocal current_caller_phone
                 nonlocal transcript_parts
                 nonlocal current_doctors
@@ -427,9 +429,13 @@ async def twilio_realtime(websocket: WebSocket):
 
                             clinic = find_clinic_by_twilio_number(to_number)
                             clinic_id = clinic["id"] if clinic else None
+                            clinic_name = clinic.get("name") if clinic else None
 
                             current_clinic_id = clinic_id
+                            current_clinic_name = clinic_name or "the dental clinic"
                             current_caller_phone = caller
+
+                            print(f"Resolved clinic | id={current_clinic_id} name={current_clinic_name}")
 
                             current_doctors = get_active_doctors_for_clinic(clinic_id)
 
@@ -519,13 +525,18 @@ async def twilio_realtime(websocket: WebSocket):
                                     "No existing patient was found for this caller phone number. "
                                     "At the start of the call, after greeting, ask for the patient's full name. "
                                 )
+                            clinic_context = (
+                                " IMPORTANT CLINIC NAME CONTEXT: "
+                                f"The clinic name is {current_clinic_name}. "
+                                "Use this clinic name when greeting the caller. "
+                            )
 
                             session_update = {
                                 "type": "session.update",
                                 "session": {
                                     "type": "realtime",
                                     "model": OPENAI_REALTIME_MODEL,
-                                    "instructions": base_realtime_instructions + doctor_context + patient_context,
+                                    "instructions": base_realtime_instructions + clinic_context + doctor_context + patient_context,
                                     "output_modalities": ["audio"],
                                     "audio": {
                                         "input": {
@@ -596,7 +607,7 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 initial_response_instructions = (
                                     "Say exactly and only this sentence, with no extra words: "
-                                    f"Hello, thanks for calling Westview Dental. Are you calling for {patient_name}?"
+                                    f"Hello, thanks for calling {current_clinic_name}. Are you calling for {patient_name}?"
                                 )
 
                             elif len(current_patient_candidates) > 1:
