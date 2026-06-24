@@ -294,8 +294,12 @@ export default function PatientsPage() {
   }
 
   return (
-    <DashboardShell>
-      <div className="space-y-6">
+return (
+      <DashboardShell
+        title="Patients"
+        description="Add, search, edit, and manage patient records for this clinic."
+      >
+        <div className="space-y-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">Patients</h1>
