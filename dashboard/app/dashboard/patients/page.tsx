@@ -294,7 +294,6 @@ export default function PatientsPage() {
   }
 
   return (
-return (
       <DashboardShell
         title="Patients"
         description="Add, search, edit, and manage patient records for this clinic."
