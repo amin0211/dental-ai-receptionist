@@ -611,6 +611,7 @@ export default function DoctorSchedulePicker({
       await createAppointmentFromRequest({
         clinicId,
         appointmentRequestId: request.id,
+        patientId: request.patient_id || null,
         patientName: editablePatientName.trim()
           ? editablePatientName.trim()
           : null,
