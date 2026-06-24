@@ -1080,16 +1080,23 @@ def find_next_available_slots_for_doctor(
 
     return found_slots
 
+def format_time_for_ai(value: datetime) -> str:
+    # 11:00 AM -> 11 AM
+    # 11:30 AM -> 11:30 AM
+    if value.minute == 0:
+        return value.strftime("%I %p").lstrip("0")
+
+    return value.strftime("%I:%M %p").lstrip("0")
+
 
 def format_slot_for_ai(slot_start: datetime, slot_end: datetime) -> str:
     day_name = slot_start.strftime("%A")
     month_name = slot_start.strftime("%B")
     day_number = slot_start.day
 
-    start_display = slot_start.strftime("%I:%M %p").lstrip("0")
-    end_display = slot_end.strftime("%I:%M %p").lstrip("0")
+    start_display = format_time_for_ai(slot_start)
 
-    return f"{day_name}, {month_name} {day_number} from {start_display} to {end_display}"
+    return f"{day_name}, {month_name} {day_number} at {start_display}"
 
 
 

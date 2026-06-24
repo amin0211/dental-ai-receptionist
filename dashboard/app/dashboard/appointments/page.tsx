@@ -12,6 +12,14 @@ import {
   getServiceCategories,
 } from "@/lib/supabaseService";
 
+type AppointmentPatient = {
+  id: string;
+  full_name: string;
+  phone_primary: string | null;
+  phone_secondary: string | null;
+  email: string | null;
+};
+
 type AppointmentRow = {
   id: string;
   clinic_id: string;
@@ -30,14 +38,23 @@ type AppointmentRow = {
   updated_at: string;
   reason: string | null;
   urgency: string | null;
-  patient: {
-    id: string;
-    full_name: string;
-    phone_primary: string;
-    phone_secondary: string | null;
-    email: string | null;
-  } | null;
+  patient: AppointmentPatient | null;
 };
+
+function normalizeAppointmentRows(rows: any[]): AppointmentRow[] {
+  return rows.map((row) => {
+    const patientValue = row.patient;
+
+    const patient = Array.isArray(patientValue)
+      ? patientValue[0] || null
+      : patientValue || null;
+
+    return {
+      ...row,
+      patient,
+    } as AppointmentRow;
+  });
+}
 
 function getTodayDateString() {
   const today = new Date();
@@ -141,33 +158,33 @@ export default function AppointmentsPage() {
     let query = supabase
       .from("appointments")
       .select(
-      `
-      id,
-      clinic_id,
-      appointment_request_id,
-      patient_id,
-      doctor_id,
-      service_category_id,
-      service_name,
-      start_time,
-      end_time,
-      duration_minutes,
-      status,
-      source,
-      notes,
-      created_at,
-      reason,
-      urgency,
-      updated_at,
-      patient:patients (
+        `
         id,
-        full_name,
-        phone_primary,
-        phone_secondary,
-        email
+        clinic_id,
+        appointment_request_id,
+        patient_id,
+        doctor_id,
+        service_category_id,
+        service_name,
+        start_time,
+        end_time,
+        duration_minutes,
+        status,
+        source,
+        notes,
+        created_at,
+        updated_at,
+        reason,
+        urgency,
+        patient:patients (
+          id,
+          full_name,
+          phone_primary,
+          phone_secondary,
+          email
+        )
+      `
       )
-    `
-    )
       .eq("clinic_id", clinicId)
       .eq("status", "confirmed")
       .gte("start_time", startIso)
@@ -191,7 +208,7 @@ export default function AppointmentsPage() {
       return;
     }
 
-    setAppointments((data || []) as AppointmentRow[]);
+    setAppointments(normalizeAppointmentRows(data || []));
     setIsLoading(false);
   }
 
@@ -277,9 +294,7 @@ export default function AppointmentsPage() {
   if (isLoadingClinic) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50">
-        <p className="text-sm font-medium text-slate-500">
-          Loading clinic...
-        </p>
+        <p className="text-sm font-medium text-slate-500">Loading clinic...</p>
       </main>
     );
   }
@@ -305,9 +320,7 @@ export default function AppointmentsPage() {
         <div className="border-b border-slate-100 p-5">
           <div className="flex flex-wrap items-end gap-4">
             <div>
-              <label className="text-sm font-medium text-slate-700">
-                Date
-              </label>
+              <label className="text-sm font-medium text-slate-700">Date</label>
               <input
                 type="date"
                 value={selectedDate}
@@ -367,8 +380,6 @@ export default function AppointmentsPage() {
         </div>
 
         <div className="p-5">
-
-
           {isLoading && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm font-medium text-slate-500">
               Loading appointments...
@@ -416,7 +427,9 @@ export default function AppointmentsPage() {
                       </td>
 
                       <td className="whitespace-nowrap px-5 py-4 text-slate-600">
-                        {appointment.patient?.phone_primary || "-"}
+                        {appointment.patient?.phone_primary ||
+                          appointment.patient?.phone_secondary ||
+                          "-"}
                       </td>
 
                       <td className="px-5 py-4 text-slate-700">
@@ -534,7 +547,9 @@ export default function AppointmentsPage() {
                     Phone
                   </p>
                   <p className="mt-1 font-bold text-slate-900">
-                    {selectedAppointment.patient?.phone_primary || "-"}
+                    {selectedAppointment.patient?.phone_primary ||
+                      selectedAppointment.patient?.phone_secondary ||
+                      "-"}
                   </p>
                 </div>
               </div>
@@ -581,7 +596,7 @@ export default function AppointmentsPage() {
             await loadAppointments();
           }}
         />
-      )}      
+      )}
     </DashboardShell>
   );
 }
