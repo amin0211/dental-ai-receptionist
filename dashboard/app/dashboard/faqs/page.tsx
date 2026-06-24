@@ -47,10 +47,10 @@ function textToKeywords(text: string) {
 }
 
 export default function ClinicFaqsPage() {
-  const { clinic, loading: clinicLoading } = useClinic();
+  const { clinic } = useClinic();
 
   const [faqs, setFaqs] = useState<ClinicFaq[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -77,15 +77,13 @@ export default function ClinicFaqsPage() {
     }
   }
 
-  useEffect(() => {
-    if (!clinicLoading && clinicId) {
-      loadFaqs();
+    useEffect(() => {
+    if (clinicId) {
+        loadFaqs();
+    } else {
+        setLoading(false);
     }
-
-    if (!clinicLoading && !clinicId) {
-      setLoading(false);
-    }
-  }, [clinicLoading, clinicId]);
+    }, [clinicId]);
 
   const filteredFaqs = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
@@ -226,7 +224,7 @@ export default function ClinicFaqsPage() {
     }
   }
 
-  if (clinicLoading || loading) {
+  if (loading) {
     return (
       <DashboardShell>
         <div className="p-6">
