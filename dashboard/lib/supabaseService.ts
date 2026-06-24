@@ -1194,6 +1194,8 @@ export type CreateAppointmentFromRequestInput = {
   notes: string | null;
   reason: string | null;
   urgency: string | null;
+  patientName?: string | null;
+  patientPhone?: string | null;
 };
 
 export async function getDoctorAppointmentsForRange({
@@ -1253,6 +1255,8 @@ export async function createAppointmentFromRequest(
       clinic_id: input.clinicId,
       appointment_request_id: input.appointmentRequestId,
       patient_id: input.patientId,
+      patient_name: input.patientName,
+      patient_phone: input.patientPhone,
       doctor_id: input.doctorId,
       service_category_id: input.serviceCategoryId,
       service_name: input.serviceName,
