@@ -338,6 +338,13 @@ export default function AppointmentScheduleEditor({
   const [selectedPatientId, setSelectedPatientId] = useState(
     appointment?.patient_id || request?.patient_id || ""
   );
+  useEffect(() => {
+    if (mode !== "confirm") return;
+
+    if (request?.patient_id) {
+      setSelectedPatientId(request.patient_id);
+    }
+  }, [mode, request?.patient_id]);
 
   const [patientSearch, setPatientSearch] = useState("");
   const [isPatientDropdownOpen, setIsPatientDropdownOpen] = useState(false);
@@ -930,7 +937,7 @@ export default function AppointmentScheduleEditor({
         const { error: updateRequestError } = await supabase
           .from("appointment_requests")
           .update({
-            patient_id: selectedPatientId,
+            patient_id: selectedPatientId || request.patient_id || null,
             reason: editableReason.trim() ? editableReason.trim() : null,
             service_category_id: selectedServiceId,
             service_category_name: editableServiceName.trim()
@@ -949,7 +956,7 @@ export default function AppointmentScheduleEditor({
         await createAppointmentFromRequest({
           clinicId,
           appointmentRequestId: request.id,
-          patientId: selectedPatientId,
+          patientId: selectedPatientId || request.patient_id || null,
           doctorId: selectedDoctorId,
           serviceCategoryId: selectedServiceId,
           serviceName: editableServiceName.trim()
@@ -1077,7 +1084,11 @@ export default function AppointmentScheduleEditor({
                           : "text-slate-400"
                       }`}
                     >
-                      {getPatientLabel(selectedPatient)}
+                      {selectedPatient
+                        ? getPatientLabel(selectedPatient)
+                        : selectedPatientId
+                        ? "Linked patient selected"
+                        : "Select patient"}
                     </span>
 
                     <span className="ml-3 shrink-0 text-slate-400">
@@ -1102,8 +1113,9 @@ export default function AppointmentScheduleEditor({
                 </div>
 
                 {mode === "confirm" &&
-                  !selectedPatientId &&
-                  request?.patient_name && (
+                    !request?.patient_id &&
+                    !selectedPatientId &&
+                    request?.patient_name && (
                     <div className="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
                       <p className="text-xs font-bold text-red-700">
                         AI extracted: {request.patient_name}
