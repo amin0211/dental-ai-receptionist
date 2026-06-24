@@ -917,8 +917,7 @@ export default function DoctorSchedulePicker({
                               </div>
                               <div className="mt-1 truncate">
                                 Booked:{" "}
-                                {slot.bookedAppointment?.patient_name ||
-                                  "Patient"}
+                                {"Patient"}
                               </div>
                             </div>
                           );
