@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import Link from "next/link";
 import {
   Appointment,
   CalendarAvailabilityException,
@@ -408,6 +409,25 @@ export default function AppointmentScheduleEditor({
   const selectedPatient = useMemo(() => {
     return patients.find((patient) => patient.id === selectedPatientId) || null;
   }, [patients, selectedPatientId]);
+
+  const createPatientHref = useMemo(() => {
+    const params = new URLSearchParams();
+
+    if (request?.patient_name) {
+      params.set("full_name", request.patient_name);
+    }
+
+    if (request?.patient_phone) {
+      params.set("phone_primary", request.patient_phone);
+    }
+
+    const queryString = params.toString();
+
+    return queryString
+      ? `/dashboard/patients?${queryString}`
+      : "/dashboard/patients";
+  }, [request?.patient_name, request?.patient_phone]);
+
 
   const filteredPatients = useMemo(() => {
     const query = patientSearch.trim().toLowerCase();
@@ -1084,12 +1104,23 @@ export default function AppointmentScheduleEditor({
                 {mode === "confirm" &&
                   !selectedPatientId &&
                   request?.patient_name && (
-                    <p className="mt-2 text-xs font-medium text-amber-700">
-                      AI extracted: {request.patient_name}
-                      {request.patient_phone
-                        ? ` — ${request.patient_phone}`
-                        : ""}
-                    </p>
+                    <div className="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
+                      <p className="text-xs font-bold text-red-700">
+                        AI extracted: {request.patient_name}
+                        {request.patient_phone ? ` — ${request.patient_phone}` : ""}
+                      </p>
+
+                      <p className="mt-1 text-xs text-red-600">
+                        This request is not linked to an existing patient yet.
+                      </p>
+
+                      <Link
+                        href={createPatientHref}
+                        className="mt-3 inline-flex rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700"
+                      >
+                        Add this patient
+                      </Link>
+                    </div>
                   )}
 
                 {isPatientDropdownOpen && (

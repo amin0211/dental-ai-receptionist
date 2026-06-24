@@ -87,6 +87,25 @@ export default function PatientsPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    const fullName = params.get("full_name");
+    const phonePrimary = params.get("phone_primary");
+
+    if (!fullName && !phonePrimary) return;
+
+    setSelectedPatient(null);
+
+    setForm((current) => ({
+      ...current,
+      full_name: fullName || current.full_name,
+      phone_primary: phonePrimary || current.phone_primary,
+    }));
+
+    setSuccessMessage("AI extracted patient information was filled in. Review and save the patient.");
+  }, []);
+
   const filteredPatients = useMemo(() => {
     const query = search.trim().toLowerCase();
 
