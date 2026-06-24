@@ -1215,7 +1215,7 @@ export default function AppointmentScheduleEditor({
                     setSelectedDoctorId(event.target.value);
                     setSelectedSlot(null);
                   }}
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
                 >
                   <option value="">Select doctor</option>
                   {doctors.map((doctor) => (
@@ -1250,7 +1250,7 @@ export default function AppointmentScheduleEditor({
                   value={selectedServiceId}
                   disabled={!selectedDoctorId || isLoadingDoctorServices}
                   onChange={(event) => handleServiceChange(event.target.value)}
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
                 >
                   <option value="">
                     {isLoadingDoctorServices
@@ -1292,7 +1292,7 @@ export default function AppointmentScheduleEditor({
                 <select
                   value={editableUrgency}
                   onChange={(event) => setEditableUrgency(event.target.value)}
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
                 >
                   <option value="low">Low</option>
                   <option value="normal">Normal</option>

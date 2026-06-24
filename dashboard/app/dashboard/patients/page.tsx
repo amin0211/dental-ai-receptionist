@@ -621,7 +621,7 @@ export default function PatientsPage() {
                       <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                         Address
                       </th>
-                      <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <th className="sticky right-0 z-10 bg-slate-50 px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
                         Actions
                       </th>
                     </tr>
@@ -667,7 +667,7 @@ export default function PatientsPage() {
                             </div>
                           </td>
 
-                          <td className="px-5 py-4 align-top">
+                          <td className="sticky right-0 bg-white px-5 py-4 align-top shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.35)]">
                             <div className="flex justify-end gap-2">
                               <button
                                 type="button"
