@@ -10,6 +10,12 @@ from config import (
     OPENAI_REALTIME_MODEL,
     OPENAI_EXTRACTION_MODEL,
 )
+from openai_usage_tracker import (
+    create_openai_usage_totals,
+    track_realtime_response_done,
+    persist_call_openai_usage,
+    print_usage_summary,
+)
 
 from supabase_service import (
     normalize_phone,
@@ -210,6 +216,8 @@ async def twilio_realtime(websocket: WebSocket):
     current_call_id = None
     transcript_parts = []
     ai_transcript_buffer = ""
+
+    openai_usage_totals = create_openai_usage_totals()
 
     current_clinic_id = None
     current_caller_phone = None
@@ -493,9 +501,12 @@ async def twilio_realtime(websocket: WebSocket):
                             if current_call_id and transcript_parts:
                                 full_transcript = "\n".join(transcript_parts)
 
-                                update_call(
-                                    current_call_id,
-                                    {
+                                persist_call_openai_usage(
+                                    call_id=current_call_id,
+                                    totals=openai_usage_totals,
+                                    update_call_func=update_call,
+                                    model=OPENAI_REALTIME_MODEL,
+                                    extra_updates={
                                         "speech_result": full_transcript,
                                         "summary": "Realtime AI call completed.",
                                     },
@@ -680,6 +691,8 @@ async def twilio_realtime(websocket: WebSocket):
                 nonlocal ai_transcript_buffer
                 nonlocal current_clinic_id
                 nonlocal current_doctors
+                nonlocal openai_usage_totals
+                nonlocal current_call_id
 
                 try:
                     async for openai_message in openai_ws:
@@ -787,7 +800,19 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                         elif event_type == "response.done":
-                            print("OpenAI event: response.done")
+                            track_realtime_response_done(openai_usage_totals, response)
+
+                            print_usage_summary(
+                                "OpenAI event: response.done",
+                                openai_usage_totals,
+                            )
+
+                            persist_call_openai_usage(
+                                call_id=current_call_id,
+                                totals=openai_usage_totals,
+                                update_call_func=update_call,
+                                model=OPENAI_REALTIME_MODEL,
+                            )
 
                         elif event_type == "error":
                             print(f"OpenAI error: {response}")
