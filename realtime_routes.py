@@ -17,6 +17,7 @@ from openai_usage_tracker import (
     print_usage_summary,
 )
 
+
 from supabase_service import (
     normalize_phone,
     find_clinic_by_twilio_number,
@@ -33,6 +34,8 @@ from supabase_service import (
     get_upcoming_appointments_for_ai,
     cancel_appointment_for_ai,
     reschedule_appointment_for_ai,
+    get_faq_answer_for_ai,
+    get_working_hours_for_ai,
 )
 
 router = APIRouter()
@@ -308,6 +311,7 @@ async def twilio_realtime(websocket: WebSocket):
     current_doctors = []
     current_patient_candidates = []
 
+    appointment_request_write_needed = False
     realtime_session_ready = False
 
     openai_url = f"wss://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
@@ -335,6 +339,39 @@ async def twilio_realtime(websocket: WebSocket):
                 "Keep replies short, natural, and receptionist-like. "
                 "Normally ask exactly one question at a time. "
                 "Do not ask for more than one new field in the same reply. "
+
+                "FAQ HANDLING: "
+                "The caller may ask general clinic questions that are not appointment booking requests. "
+                "Examples include: Do you accept insurance, do you offer direct billing, do you have parking, "
+                "do you accept children, do you offer emergency appointments, do you do wisdom tooth removal, "
+                "what services do you provide, what is your cancellation policy, or similar clinic policy questions. "
+                "When the caller asks a general clinic question, call the get_faq_answer tool with the caller's exact question. "
+                "If get_faq_answer returns ok=true and faq.answer exists, answer using only that FAQ answer. "
+                "Keep the answer short, natural, and receptionist-like. "
+                "Do not invent clinic policies, prices, insurance coverage, treatment guarantees, parking details, or availability details. "
+                "If the FAQ answer says something depends on insurance plan, availability, provider, patient condition, or dentist assessment, "
+                "tell the caller the front desk can verify it. "
+                "If get_faq_answer returns ok=false, say you are not fully sure about that specific question and offer to have the front desk follow up. "
+                "Do not answer clinic FAQ questions from general knowledge. Always use clinic-specific FAQ data when available. "
+                "If the FAQ question turns into booking, for example the caller asks about wisdom tooth and then wants an appointment, "
+                "answer the FAQ first, then continue the normal booking flow by asking for the dental visit reason or using the stated reason. "
+                "For emergency-related FAQ, do not diagnose and do not promise treatment. "
+                "If the caller mentions severe swelling, trouble breathing, uncontrolled bleeding, fever, facial trauma, or serious injury, "
+                "advise them to call 911 or go to the nearest emergency room, and if collecting appointment information mark the request as urgent. "
+
+                "WORKING HOURS HANDLING: "
+                "If the caller asks about clinic hours, opening hours, closing time, whether the clinic is open, "
+                "or a specific doctor's working hours, call the get_working_hours tool. "
+                "Examples include: What are your hours, are you open today, what time do you close, "
+                "is Dr. Smith working on Monday, clinic hours, doctor hours, opening hours, closing hours. "
+                "Use get_working_hours instead of get_faq_answer for working-hours questions. "
+                "If the caller asks about a specific doctor, pass the doctor name. "
+                "If the caller mentions a specific day or date, pass it as date_raw. "
+                "If the caller asks general hours without a date, pass date_raw as null. "
+                "Answer only using the tool result. Do not invent hours. "
+                "If the tool says no hours were found, say the front desk can verify the hours. "
+                "Do not treat a working-hours question as an appointment booking request unless the caller clearly says they want to book, schedule, change, or cancel an appointment. "
+
                 "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
                 "or when the caller says the request is for someone else, or when the patient identity is not clear. "
                 "Use brief natural acknowledgements only when they help the call feel normal, such as: Sure, I can repeat that. "
@@ -375,7 +412,9 @@ async def twilio_realtime(websocket: WebSocket):
                 "After the caller clearly selects one new slot, call reschedule_appointment with the original appointment id, confirmed patient id, selected slot doctor_id, starts_at, and ends_at. "
                 "Only reschedule after the caller clearly selects one new offered slot. "
                 "Never reschedule based on unclear audio, background speech, maybe, or ambiguous yes. "
-                "After reschedule_appointment succeeds, tell the caller the appointment has been changed to the new time. "
+                "After reschedule_appointment succeeds, tell the caller the previous appointment has been cancelled and the new appointment request has been noted. "
+                "Never say the new appointment is confirmed. "
+                "Say the front desk will contact them to confirm. "
                 "If reschedule_appointment fails, tell the caller the front desk can help reschedule it. "
 
                 "For appointment booking, do not force the caller to choose a doctor first. "
@@ -652,6 +691,61 @@ async def twilio_realtime(websocket: WebSocket):
                                                 "additionalProperties": False,
                                             },
                                         },
+                                        {
+                                            "type": "function",
+                                            "name": "get_faq_answer",
+                                            "description": (
+                                                "Use this when the caller asks a general clinic FAQ question, "
+                                                "such as insurance, direct billing, parking, children, emergency availability, "
+                                                "wisdom teeth, clinic services, cancellation policy, payment policy, or other "
+                                                "non-booking clinic questions. This tool returns the clinic-specific answer."
+                                            ),
+                                            "parameters": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "caller_question": {
+                                                        "type": "string",
+                                                        "description": "The caller's exact clinic question or statement.",
+                                                    },
+                                                },
+                                                "required": ["caller_question"],
+                                                "additionalProperties": False,
+                                            },
+                                        },  
+                                        {
+                                            "type": "function",
+                                            "name": "get_working_hours",
+                                            "description": (
+                                                "Use this when the caller asks about clinic hours, opening hours, closing time, "
+                                                "whether the clinic is open on a specific date or day, or a specific doctor's working hours. "
+                                                "This tool reads calendar_availability_rules and calendar_availability_exceptions. "
+                                                "Clinic-level rules use doctor_id = null. Doctor-specific rules use that doctor's id."
+                                            ),
+                                            "parameters": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "caller_question": {
+                                                        "type": "string",
+                                                        "description": "The caller's exact question about hours or working availability.",
+                                                    },
+                                                    "doctor_name": {
+                                                        "type": ["string", "null"],
+                                                        "description": "Doctor name if the caller asks about a specific doctor, otherwise null.",
+                                                    },
+                                                    "date_raw": {
+                                                        "type": ["string", "null"],
+                                                        "description": "Specific day or date mentioned by the caller, such as today, tomorrow, Monday, July 20, or null for general weekly hours.",
+                                                    },
+                                                },
+                                                "required": [
+                                                    "caller_question",
+                                                    "doctor_name",
+                                                    "date_raw",
+                                                ],
+                                                "additionalProperties": False,
+                                            },
+                                        },                                        
+
                                         {
                                             "type": "function",
                                             "name": "get_upcoming_appointments",
@@ -1006,7 +1100,8 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 should_create_request = (
-                                    not is_non_booking_management_call
+                                    appointment_request_write_needed
+                                    and not is_non_booking_management_call
                                     and bool(
                                         patient_name
                                         or patient_id
@@ -1093,6 +1188,7 @@ async def twilio_realtime(websocket: WebSocket):
                 nonlocal current_doctors
                 nonlocal openai_usage_totals
                 nonlocal current_call_id
+                nonlocal appointment_request_write_needed
 
                 try:
                     async for openai_message in openai_ws:
@@ -1166,6 +1262,8 @@ async def twilio_realtime(websocket: WebSocket):
                                     print(f"Failed to parse tool arguments: {e}")
                                     args = {}
 
+                                appointment_request_write_needed = True
+
                                 tool_result = get_booking_options_for_ai(
                                     clinic_id=current_clinic_id,
                                     doctors=current_doctors,
@@ -1178,6 +1276,81 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 print(f"Realtime booking tool result: {tool_result}")
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "function_call_output",
+                                                "call_id": tool_call_id,
+                                                "output": json.dumps(
+                                                    tool_result,
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        }
+                                    )
+                                )
+
+                                await openai_ws.send(
+                                    json.dumps({"type": "response.create"})
+                                )
+
+                            elif tool_name == "get_faq_answer":
+                                try:
+                                    args = json.loads(arguments_raw)
+                                except Exception as e:
+                                    print(f"Failed to parse FAQ arguments: {e}")
+                                    args = {}
+
+                                tool_result = get_faq_answer_for_ai(
+                                    clinic_id=current_clinic_id,
+                                    caller_question=args.get("caller_question"),
+                                )
+
+                                print(f"Realtime FAQ tool result: {tool_result}")
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "function_call_output",
+                                                "call_id": tool_call_id,
+                                                "output": json.dumps(
+                                                    tool_result,
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        }
+                                    )
+                                )
+
+                                await openai_ws.send(
+                                    json.dumps({"type": "response.create"})
+                                )
+
+                            elif tool_name == "get_working_hours":
+                                try:
+                                    args = json.loads(arguments_raw)
+                                except Exception as e:
+                                    print(f"Failed to parse working hours arguments: {e}")
+                                    args = {}
+
+                                tool_result = get_working_hours_for_ai(
+                                    clinic_id=current_clinic_id,
+                                    doctors=current_doctors,
+                                    caller_question=args.get("caller_question"),
+                                    doctor_name=args.get("doctor_name"),
+                                    date_raw=args.get("date_raw"),
+                                )
+
+                                print(f"Realtime working hours tool result: {tool_result}")
+
+                                # Important:
+                                # Working-hours questions are informational only.
+                                # Do NOT set appointment_request_write_needed = True here.
 
                                 await openai_ws.send(
                                     json.dumps(
@@ -1212,6 +1385,9 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 print(f"Realtime appointment lookup result: {tool_result}")
+
+                                # Appointment lookup is informational.
+                                # Do NOT set appointment_request_write_needed = True here.
 
                                 await openai_ws.send(
                                     json.dumps(
@@ -1248,6 +1424,9 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 print(f"Realtime cancel appointment result: {tool_result}")
 
+                                # Cancel updates the appointment directly.
+                                # Do NOT set appointment_request_write_needed = True here.
+
                                 await openai_ws.send(
                                     json.dumps(
                                         {
@@ -1282,9 +1461,20 @@ async def twilio_realtime(websocket: WebSocket):
                                     doctor_id=args.get("doctor_id"),
                                     start_time_iso=args.get("start_time_iso"),
                                     end_time_iso=args.get("end_time_iso"),
+                                    call_id=current_call_id,
+                                    patient_phone=current_caller_phone,
                                 )
 
                                 print(f"Realtime reschedule appointment result: {tool_result}")
+
+                                # Very important:
+                                # Reschedule uses get_booking_options before this, which sets
+                                # appointment_request_write_needed = True.
+                                # But reschedule_appointment_for_ai already cancels the old appointment
+                                # and creates the new appointment_request.
+                                # Therefore, reset this flag to avoid creating a duplicate request at call end.
+                                if tool_result.get("ok"):
+                                    appointment_request_write_needed = False
 
                                 await openai_ws.send(
                                     json.dumps(

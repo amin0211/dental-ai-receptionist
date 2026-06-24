@@ -1546,7 +1546,6 @@ def appointment_slot_has_conflict(
         print(f"Error checking appointment slot conflict: {e}")
         return True
 
-
 def reschedule_appointment_for_ai(
     clinic_id: str | None,
     patient_id: str | None,
@@ -1554,6 +1553,8 @@ def reschedule_appointment_for_ai(
     doctor_id: str | None,
     start_time_iso: str | None,
     end_time_iso: str | None,
+    call_id: str | None = None,
+    patient_phone: str | None = None,
 ) -> dict:
     if not supabase:
         return {
@@ -1612,17 +1613,19 @@ def reschedule_appointment_for_ai(
         }
 
     try:
-        result = (
+        now_iso = datetime.now(ZoneInfo("America/Vancouver")).isoformat()
+
+        # 1. Cancel the old appointment.
+        cancel_result = (
             supabase.table("appointments")
             .update(
                 {
-                    "doctor_id": doctor_id,
-                    "start_time": start_time_iso,
-                    "end_time": end_time_iso,
-                    "status": "confirmed",
-                    "updated_at": datetime.now(
-                        ZoneInfo("America/Vancouver")
-                    ).isoformat(),
+                    "status": "cancelled",
+                    "updated_at": now_iso,
+                    "notes": (
+                        (appointment.get("notes") or "")
+                        + "\nRescheduled by AI receptionist. New appointment request created."
+                    ).strip(),
                 }
             )
             .eq("clinic_id", clinic_id)
@@ -1631,13 +1634,152 @@ def reschedule_appointment_for_ai(
             .execute()
         )
 
-        updated = result.data[0] if result.data else None
+        cancelled_appointment = (
+            cancel_result.data[0]
+            if cancel_result.data
+            else appointment
+        )
+
+        # 2. Load patient info if available.
+        patient_name = appointment.get("patient_name")
+        final_patient_phone = patient_phone or appointment.get("patient_phone")
+
+        if not patient_name or not final_patient_phone:
+            try:
+                patient_result = (
+                    supabase.table("patients")
+                    .select("id, full_name, phone_primary")
+                    .eq("clinic_id", clinic_id)
+                    .eq("id", patient_id)
+                    .limit(1)
+                    .execute()
+                )
+
+                if patient_result.data:
+                    patient_row = patient_result.data[0]
+                    patient_name = patient_name or patient_row.get("full_name")
+                    final_patient_phone = (
+                        final_patient_phone
+                        or patient_row.get("phone_primary")
+                    )
+            except Exception as patient_lookup_error:
+                print(f"Could not load patient for reschedule request: {patient_lookup_error}")
+
+        # 3. Load doctor name if available.
+        preferred_doctor_name = appointment.get("preferred_doctor_name")
+
+        try:
+            doctor_result = (
+                supabase.table("clinic_doctors")
+                .select("id, full_name, display_name")
+                .eq("clinic_id", clinic_id)
+                .eq("id", doctor_id)
+                .limit(1)
+                .execute()
+            )
+
+            if doctor_result.data:
+                doctor_row = doctor_result.data[0]
+                preferred_doctor_name = (
+                    doctor_row.get("display_name")
+                    or doctor_row.get("full_name")
+                    or preferred_doctor_name
+                )
+        except Exception as doctor_lookup_error:
+            print(f"Could not load doctor for reschedule request: {doctor_lookup_error}")
+
+        # 4. Format preferred date/time from selected new slot.
+        preferred_date_raw = None
+        preferred_time_raw = None
+        preferred_time_combined = start_time_iso
+
+        try:
+            tz = ZoneInfo("America/Vancouver")
+
+            selected_start = datetime.fromisoformat(
+                str(start_time_iso).replace("Z", "+00:00")
+            ).astimezone(tz)
+
+            preferred_date_raw = selected_start.date().isoformat()
+            preferred_time_raw = selected_start.strftime("%H:%M")
+            preferred_time_combined = (
+                f"{preferred_date_raw} {preferred_time_raw}"
+            )
+        except Exception as parse_error:
+            print(f"Could not parse selected reschedule slot: {parse_error}")
+
+        # 5. Create a new appointment_request, like a fresh booking request.
+        request_payload = {
+            "clinic_id": clinic_id,
+            "call_id": call_id,
+            "patient_id": patient_id,
+            "patient_phone": normalize_phone(final_patient_phone),
+            "patient_name": patient_name,
+            "reason": appointment.get("reason") or appointment.get("service_name") or "reschedule",
+            "preferred_time": preferred_time_combined,
+            "urgency": appointment.get("urgency") or "normal",
+            "status": "new",
+            "doctor_id": doctor_id,
+            "preferred_doctor_name": preferred_doctor_name,
+        }
+
+        print(f"Inserting reschedule appointment request payload: {request_payload}")
+
+        request_result = (
+            supabase.table("appointment_requests")
+            .insert(request_payload)
+            .execute()
+        )
+
+        new_request = request_result.data[0] if request_result.data else None
+
+        if new_request and new_request.get("id"):
+            request_updates = {
+                "doctor_id": doctor_id,
+                "preferred_doctor_name": preferred_doctor_name,
+                "preferred_date_raw": preferred_date_raw,
+                "preferred_time_raw": preferred_time_raw,
+                "preferred_date_confirmed": True,
+                "preferred_time_confirmed": True,
+            }
+
+            if appointment.get("service_category_id"):
+                request_updates["service_category_id"] = appointment.get("service_category_id")
+
+            if appointment.get("service_name"):
+                request_updates["service_category_name"] = appointment.get("service_name")
+
+            if appointment.get("duration_minutes"):
+                request_updates["duration_minutes"] = appointment.get("duration_minutes")
+
+            try:
+                (
+                    supabase.table("appointment_requests")
+                    .update(request_updates)
+                    .eq("id", new_request.get("id"))
+                    .execute()
+                )
+            except Exception as update_request_error:
+                print(f"Could not update reschedule appointment request details: {update_request_error}")
 
         return {
             "ok": True,
-            "status": "rescheduled",
-            "message_for_ai": "Tell the caller the appointment has been changed to the new time.",
-            "appointment": updated,
+            "status": "reschedule_request_created",
+            "message_for_ai": (
+                "Tell the caller the previous appointment has been cancelled, "
+                "and the new appointment request has been noted. "
+                "Do not say the new appointment is confirmed. "
+                "Say the front desk will contact them to confirm."
+            ),
+            "cancelled_appointment": cancelled_appointment,
+            "new_appointment_request": new_request,
+            "selected_slot": {
+                "doctor_id": doctor_id,
+                "starts_at": start_time_iso,
+                "ends_at": end_time_iso,
+                "preferred_date_raw": preferred_date_raw,
+                "preferred_time_raw": preferred_time_raw,
+            },
         }
 
     except Exception as e:
@@ -1648,7 +1790,9 @@ def reschedule_appointment_for_ai(
             "reason": "reschedule_failed",
             "message_for_ai": "Tell the caller the front desk can help reschedule the appointment.",
         }
-        
+
+
+
 def get_booking_options_for_ai(
     clinic_id: str | None,
     doctors: list[dict],
@@ -1893,3 +2037,683 @@ def get_booking_options_for_ai(
     }
 
 
+def get_active_clinic_faqs(clinic_id: str | None) -> list[dict]:
+    if not supabase or not clinic_id:
+        print("Cannot load clinic FAQs: missing supabase or clinic_id")
+        return []
+
+    try:
+        result = (
+            supabase.table("clinic_faqs")
+            .select(
+                """
+                id,
+                clinic_id,
+                question,
+                answer,
+                category,
+                keywords,
+                is_active,
+                sort_order,
+                created_at,
+                updated_at
+                """
+            )
+            .eq("clinic_id", clinic_id)
+            .eq("is_active", True)
+            .order("sort_order")
+            .order("created_at")
+            .execute()
+        )
+
+        rows = result.data or []
+
+        print(f"Loaded active FAQs for clinic={clinic_id}: {len(rows)} rows")
+
+        return rows
+
+    except Exception as e:
+        print(f"Error loading clinic FAQs: {e}")
+        return []
+
+
+def score_faq_match(faq: dict, caller_text: str) -> int:
+    normalized_text = normalize_search_text(caller_text)
+
+    if not normalized_text:
+        return 0
+
+    question = normalize_search_text(faq.get("question"))
+    answer = normalize_search_text(faq.get("answer"))
+    category = normalize_search_text(faq.get("category"))
+
+    raw_keywords = faq.get("keywords") or []
+
+    if not isinstance(raw_keywords, list):
+        raw_keywords = []
+
+    keywords = [
+        normalize_search_text(keyword)
+        for keyword in raw_keywords
+        if normalize_search_text(keyword)
+    ]
+
+    score = 0
+
+    # Exact question match
+    if question and normalized_text == question:
+        score += 1000
+
+    # Caller text contains the FAQ question or FAQ question contains caller text
+    if question and question in normalized_text:
+        score += 700
+
+    if question and normalized_text in question:
+        score += 500
+
+    # Keyword matching
+    for keyword in keywords:
+        if not keyword:
+            continue
+
+        if keyword == normalized_text:
+            score += 600
+
+        elif keyword in normalized_text:
+            score += 350 + len(keyword)
+
+        elif normalized_text in keyword:
+            score += 150
+
+    # Category matching, weaker
+    if category and category in normalized_text:
+        score += 120
+
+    # Word overlap between caller text and FAQ question/answer
+    caller_words = [
+        word for word in normalized_text.split()
+        if len(word) >= 3
+    ]
+
+    searchable_text = " ".join(
+        [
+            question,
+            answer,
+            category,
+            " ".join(keywords),
+        ]
+    )
+
+    overlap_count = 0
+
+    for word in caller_words:
+        if word in searchable_text:
+            overlap_count += 1
+
+    score += overlap_count * 25
+
+    # Penalize very weak one-word matches
+    if score < 200 and overlap_count <= 1:
+        return 0
+
+    return score
+
+
+def match_clinic_faq_from_text(
+    clinic_id: str | None,
+    caller_text: str | None,
+    minimum_score: int = 250,
+) -> dict | None:
+    if not clinic_id or not caller_text:
+        return None
+
+    faqs = get_active_clinic_faqs(clinic_id)
+
+    if not faqs:
+        print("No active FAQs found")
+        return None
+
+    best_faq = None
+    best_score = 0
+
+    for faq in faqs:
+        score = score_faq_match(faq, caller_text)
+
+        if score > best_score:
+            best_score = score
+            best_faq = faq
+
+    print(
+        f"FAQ match result | text={caller_text} | "
+        f"best_score={best_score} | best_faq={best_faq}"
+    )
+
+    if best_faq and best_score >= minimum_score:
+        matched = dict(best_faq)
+        matched["match_score"] = best_score
+        return matched
+
+    return None
+
+
+def get_faq_answer_for_ai(
+    clinic_id: str | None,
+    caller_question: str | None,
+) -> dict:
+    if not supabase:
+        return {
+            "ok": False,
+            "reason": "supabase_not_initialized",
+            "message_for_ai": "Tell the caller the front desk can help with that question.",
+            "faq": None,
+        }
+
+    if not clinic_id:
+        return {
+            "ok": False,
+            "reason": "missing_clinic_id",
+            "message_for_ai": "Tell the caller the front desk can help with that question.",
+            "faq": None,
+        }
+
+    if not caller_question:
+        return {
+            "ok": False,
+            "reason": "missing_question",
+            "message_for_ai": "Ask the caller what they would like to know.",
+            "faq": None,
+        }
+
+    faq = match_clinic_faq_from_text(
+        clinic_id=clinic_id,
+        caller_text=caller_question,
+    )
+
+    if not faq:
+        return {
+            "ok": False,
+            "reason": "faq_not_found",
+            "message_for_ai": (
+                "Tell the caller you are not fully sure about that and "
+                "offer to have the front desk follow up."
+            ),
+            "faq": None,
+        }
+
+    return {
+        "ok": True,
+        "status": "found",
+        "message_for_ai": (
+            "Answer the caller using the FAQ answer only. "
+            "Do not invent extra clinic policies. "
+            "If the answer says coverage, treatment, or availability depends on details, "
+            "tell the caller the front desk can verify it."
+        ),
+        "faq": {
+            "id": faq.get("id"),
+            "question": faq.get("question"),
+            "answer": faq.get("answer"),
+            "category": faq.get("category"),
+            "keywords": faq.get("keywords") or [],
+            "match_score": faq.get("match_score"),
+        },
+    }
+
+
+WEEKDAY_NAMES_BY_DB_DAY = {
+    0: "Sunday",
+    1: "Monday",
+    2: "Tuesday",
+    3: "Wednesday",
+    4: "Thursday",
+    5: "Friday",
+    6: "Saturday",
+}
+
+
+def get_next_date_for_weekday(
+    weekday_name: str,
+    timezone_name: str = "America/Vancouver",
+) -> date | None:
+    if not weekday_name:
+        return None
+
+    normalized = normalize_search_text(weekday_name)
+
+    weekday_map = {
+        "monday": 0,
+        "mon": 0,
+        "tuesday": 1,
+        "tue": 1,
+        "wednesday": 2,
+        "wed": 2,
+        "thursday": 3,
+        "thu": 3,
+        "friday": 4,
+        "fri": 4,
+        "saturday": 5,
+        "sat": 5,
+        "sunday": 6,
+        "sun": 6,
+    }
+
+    wanted_weekday = weekday_map.get(normalized)
+
+    if wanted_weekday is None:
+        return None
+
+    tz = ZoneInfo(timezone_name)
+    today = datetime.now(tz).date()
+
+    days_ahead = (wanted_weekday - today.weekday()) % 7
+
+    return today + timedelta(days=days_ahead)
+
+
+def parse_working_hours_date_raw(
+    date_raw: str | None,
+    timezone_name: str = "America/Vancouver",
+) -> date | None:
+    if not date_raw:
+        return None
+
+    text = str(date_raw).strip()
+
+    if not text:
+        return None
+
+    normalized = normalize_search_text(text)
+
+    tz = ZoneInfo(timezone_name)
+    today = datetime.now(tz).date()
+
+    if normalized == "today":
+        return today
+
+    if normalized == "tomorrow":
+        return today + timedelta(days=1)
+
+    weekday_date = get_next_date_for_weekday(
+        weekday_name=text,
+        timezone_name=timezone_name,
+    )
+
+    if weekday_date:
+        return weekday_date
+
+    return parse_preferred_date_raw(
+        preferred_date_raw=text,
+        timezone_name=timezone_name,
+    )
+
+
+def format_db_time_for_ai(value) -> str | None:
+    parsed_time = parse_db_time(value)
+
+    if not parsed_time:
+        return None
+
+    value_as_datetime = datetime(
+        2000,
+        1,
+        1,
+        parsed_time.hour,
+        parsed_time.minute,
+        parsed_time.second,
+    )
+
+    if parsed_time.minute == 0:
+        return value_as_datetime.strftime("%I %p").lstrip("0")
+
+    return value_as_datetime.strftime("%I:%M %p").lstrip("0")
+
+
+def get_calendar_availability_rules_for_scope(
+    clinic_id: str | None,
+    doctor_id: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[dict]:
+    if not supabase or not clinic_id:
+        print("Cannot load availability rules: missing supabase or clinic_id")
+        return []
+
+    try:
+        query = (
+            supabase.table("calendar_availability_rules")
+            .select("*")
+            .eq("clinic_id", clinic_id)
+            .eq("is_active", True)
+        )
+
+        if doctor_id:
+            query = query.eq("doctor_id", doctor_id)
+        else:
+            query = query.is_("doctor_id", "null")
+
+        if start_date and end_date:
+            query = (
+                query
+                .lte("start_date", end_date.isoformat())
+                .or_(f"end_date.is.null,end_date.gte.{start_date.isoformat()}")
+            )
+
+        result = (
+            query
+            .order("day_of_week")
+            .order("start_time")
+            .execute()
+        )
+
+        rows = result.data or []
+
+        print(
+            f"Loaded availability rules for scope | "
+            f"clinic_id={clinic_id} | doctor_id={doctor_id} | "
+            f"start_date={start_date} | end_date={end_date} | rows={rows}"
+        )
+
+        return rows
+
+    except Exception as e:
+        print(f"Error loading availability rules for scope: {e}")
+        return []
+
+
+def summarize_weekly_working_hours_from_rules(
+    rules: list[dict],
+) -> list[dict]:
+    grouped: dict[int, list[str]] = {
+        0: [],
+        1: [],
+        2: [],
+        3: [],
+        4: [],
+        5: [],
+        6: [],
+    }
+
+    for rule in rules:
+        repeat_type = rule.get("repeat_type") or "none"
+
+        start_display = format_db_time_for_ai(rule.get("start_time"))
+        end_display = format_db_time_for_ai(rule.get("end_time"))
+
+        if not start_display or not end_display:
+            continue
+
+        interval_display = f"{start_display} to {end_display}"
+
+        if repeat_type == "daily":
+            target_db_days = [0, 1, 2, 3, 4, 5, 6]
+
+        elif repeat_type == "weekdays":
+            target_db_days = [1, 2, 3, 4, 5]
+
+        elif repeat_type in ["weekly", "custom"]:
+            db_day = rule.get("day_of_week")
+            target_db_days = [db_day] if db_day in grouped else []
+
+        elif repeat_type == "none":
+            start_date_raw = rule.get("start_date")
+            target_db_days = []
+
+            if start_date_raw:
+                try:
+                    rule_date = date.fromisoformat(str(start_date_raw))
+                    target_db_days = [python_day_to_db_day(rule_date)]
+                except Exception:
+                    target_db_days = []
+
+        else:
+            target_db_days = []
+
+        for db_day in target_db_days:
+            if db_day not in grouped:
+                continue
+
+            if interval_display not in grouped[db_day]:
+                grouped[db_day].append(interval_display)
+
+    weekly_hours = []
+
+    for db_day in [1, 2, 3, 4, 5, 6, 0]:
+        intervals = grouped.get(db_day) or []
+        day_name = WEEKDAY_NAMES_BY_DB_DAY.get(db_day, "Unknown")
+
+        weekly_hours.append(
+            {
+                "day_of_week": db_day,
+                "day_name": day_name,
+                "intervals": intervals,
+                "is_closed": len(intervals) == 0,
+                "display": (
+                    f"{day_name}: {', '.join(intervals)}"
+                    if intervals
+                    else f"{day_name}: closed"
+                ),
+            }
+        )
+
+    return weekly_hours
+
+
+def format_working_hours_intervals_for_ai(
+    intervals: list[tuple[datetime, datetime]],
+) -> list[dict]:
+    formatted = []
+
+    for start_dt, end_dt in intervals:
+        formatted.append(
+            {
+                "starts_at": start_dt.isoformat(),
+                "ends_at": end_dt.isoformat(),
+                "start_time": start_dt.strftime("%H:%M"),
+                "end_time": end_dt.strftime("%H:%M"),
+                "display": f"{format_time_for_ai(start_dt)} to {format_time_for_ai(end_dt)}",
+            }
+        )
+
+    return formatted
+
+
+def get_working_hours_for_ai(
+    clinic_id: str | None,
+    doctors: list[dict] | None = None,
+    caller_question: str | None = None,
+    doctor_name: str | None = None,
+    date_raw: str | None = None,
+    timezone_name: str = "America/Vancouver",
+) -> dict:
+    if not supabase:
+        return {
+            "ok": False,
+            "reason": "supabase_not_initialized",
+            "message_for_ai": "Tell the caller the front desk can help verify the hours.",
+        }
+
+    if not clinic_id:
+        return {
+            "ok": False,
+            "reason": "missing_clinic_id",
+            "message_for_ai": "Tell the caller the front desk can help verify the hours.",
+        }
+
+    doctors = doctors or []
+
+    matched_doctor = None
+
+    if doctor_name:
+        matched_doctor = match_doctor_from_name(
+            doctors=doctors,
+            preferred_doctor_name=doctor_name,
+        )
+
+    if not matched_doctor and caller_question:
+        matched_doctor = match_doctor_from_name(
+            doctors=doctors,
+            preferred_doctor_name=caller_question,
+        )
+
+    target_doctor_id = matched_doctor.get("id") if matched_doctor else None
+    target_doctor_name = (
+        get_doctor_display_name(matched_doctor)
+        if matched_doctor
+        else None
+    )
+
+    target_date = parse_working_hours_date_raw(
+        date_raw=date_raw,
+        timezone_name=timezone_name,
+    )
+
+    if not target_date and caller_question:
+        target_date = parse_working_hours_date_raw(
+            date_raw=caller_question,
+            timezone_name=timezone_name,
+        )
+
+    scope = "doctor" if target_doctor_id else "clinic"
+    scope_name = target_doctor_name or "the clinic"
+
+    if target_date:
+        rules = get_calendar_availability_rules_for_scope(
+            clinic_id=clinic_id,
+            doctor_id=target_doctor_id,
+            start_date=target_date,
+            end_date=target_date,
+        )
+
+        if not rules:
+            return {
+                "ok": True,
+                "status": "no_hours_found",
+                "scope": scope,
+                "scope_name": scope_name,
+                "doctor": (
+                    {
+                        "doctor_id": target_doctor_id,
+                        "doctor_name": target_doctor_name,
+                    }
+                    if target_doctor_id
+                    else None
+                ),
+                "date": target_date.isoformat(),
+                "intervals": [],
+                "message_for_ai": (
+                    f"Tell the caller no working hours were found for {scope_name} on that date. "
+                    "Say the front desk can verify the hours."
+                ),
+            }
+
+        rule_ids = [
+            rule.get("id")
+            for rule in rules
+            if rule.get("id")
+        ]
+
+        exceptions = get_calendar_availability_exceptions_for_rules(
+            clinic_id=clinic_id,
+            rule_ids=rule_ids,
+            start_date=target_date,
+            end_date=target_date,
+        )
+
+        intervals = get_daily_available_intervals_from_rules(
+            rules=rules,
+            exceptions=exceptions,
+            target_date=target_date,
+            timezone_name=timezone_name,
+        )
+
+        formatted_intervals = format_working_hours_intervals_for_ai(intervals)
+
+        if not formatted_intervals:
+            return {
+                "ok": True,
+                "status": "closed",
+                "scope": scope,
+                "scope_name": scope_name,
+                "doctor": (
+                    {
+                        "doctor_id": target_doctor_id,
+                        "doctor_name": target_doctor_name,
+                    }
+                    if target_doctor_id
+                    else None
+                ),
+                "date": target_date.isoformat(),
+                "intervals": [],
+                "message_for_ai": (
+                    f"Tell the caller {scope_name} appears to be closed on that date. "
+                    "Say the front desk can verify if needed."
+                ),
+            }
+
+        return {
+            "ok": True,
+            "status": "found",
+            "scope": scope,
+            "scope_name": scope_name,
+            "doctor": (
+                {
+                    "doctor_id": target_doctor_id,
+                    "doctor_name": target_doctor_name,
+                }
+                if target_doctor_id
+                else None
+            ),
+            "date": target_date.isoformat(),
+            "intervals": formatted_intervals,
+            "message_for_ai": (
+                f"Tell the caller {scope_name}'s working hours for that date. "
+                "Use only the returned intervals. Keep the answer short."
+            ),
+        }
+
+    rules = get_calendar_availability_rules_for_scope(
+        clinic_id=clinic_id,
+        doctor_id=target_doctor_id,
+    )
+
+    if not rules:
+        return {
+            "ok": False,
+            "reason": "no_working_hours_found",
+            "scope": scope,
+            "scope_name": scope_name,
+            "doctor": (
+                {
+                    "doctor_id": target_doctor_id,
+                    "doctor_name": target_doctor_name,
+                }
+                if target_doctor_id
+                else None
+            ),
+            "message_for_ai": (
+                f"Tell the caller working hours for {scope_name} are not available in the system, "
+                "and the front desk can verify them."
+            ),
+        }
+
+    weekly_hours = summarize_weekly_working_hours_from_rules(rules)
+
+    return {
+        "ok": True,
+        "status": "found",
+        "scope": scope,
+        "scope_name": scope_name,
+        "doctor": (
+            {
+                "doctor_id": target_doctor_id,
+                "doctor_name": target_doctor_name,
+            }
+            if target_doctor_id
+            else None
+        ),
+        "weekly_hours": weekly_hours,
+        "message_for_ai": (
+            f"Tell the caller {scope_name}'s working hours using weekly_hours. "
+            "Keep the answer short. Do not invent hours."
+        ),
+    }
