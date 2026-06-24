@@ -1935,7 +1935,32 @@ def handle_state_transition(
 
 @app.post("/twilio/voice")
 async def twilio_voice(request: Request):
-    return await twilio_voice_stateful(request)
+    request_start_ms = now_ms()
+    print("[TIMING] /twilio/voice received | routing_to=realtime")
+
+    form = await request.form()
+
+    caller = normalize_phone(form.get("From"))
+    to_number = normalize_phone(form.get("To"))
+    call_sid = form.get("CallSid") or ""
+
+    print(
+        f"[VOICE_START_REALTIME] call_sid={call_sid} "
+        f"from={caller} to={to_number}"
+    )
+
+    log_timing(
+        "TOTAL /twilio/voice",
+        request_start_ms,
+        f"return=realtime call_sid={call_sid}",
+    )
+
+    return twiml_connect_realtime(
+        caller_phone=caller,
+        to_number=to_number,
+        call_sid=call_sid,
+        intro_message="Hi, thanks for calling Westview Dental.",
+    )
 
 
 @app.post("/twilio/voice-stateful")
