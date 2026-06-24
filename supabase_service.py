@@ -18,17 +18,60 @@ def normalize_phone(phone: str | None) -> str:
     return phone.strip()
 
 
+
+
+def normalize_phone_digits(phone: str | None) -> str:
+    if not phone:
+        return ""
+
+    return "".join(ch for ch in str(phone) if ch.isdigit())
+
+
+def phones_match(phone_a: str | None, phone_b: str | None) -> bool:
+    digits_a = normalize_phone_digits(phone_a)
+    digits_b = normalize_phone_digits(phone_b)
+
+    if not digits_a or not digits_b:
+        return False
+
+    if digits_a == digits_b:
+        return True
+
+    # Canada/US case:
+    # +17788816242 vs 7788816242
+    if len(digits_a) == 11 and digits_a.startswith("1"):
+        digits_a_without_country = digits_a[1:]
+    else:
+        digits_a_without_country = digits_a
+
+    if len(digits_b) == 11 and digits_b.startswith("1"):
+        digits_b_without_country = digits_b[1:]
+    else:
+        digits_b_without_country = digits_b
+
+    return digits_a_without_country == digits_b_without_country
+
+
 def find_patients_by_phone(
     clinic_id: str | None,
     phone: str | None,
 ) -> list[dict]:
     if not supabase or not clinic_id or not phone:
-        print("Cannot find patients by phone: missing supabase, clinic_id, or phone")
+        print(
+            f"Cannot find patients by phone: supabase={bool(supabase)}, clinic_id={clinic_id}, phone={phone}"
+        )
         return []
 
     clean_phone = normalize_phone(phone)
+    search_digits = normalize_phone_digits(clean_phone)
 
     try:
+        print(
+            f"Finding patients by phone | clinic_id={clinic_id} | raw_phone={phone} | clean_phone={clean_phone} | digits={search_digits}"
+        )
+
+        # For MVP, load clinic patients and compare normalized digits in Python.
+        # This avoids exact-match problems with +1, spaces, dashes, parentheses, etc.
         result = (
             supabase.table("patients")
             .select(
@@ -44,25 +87,32 @@ def find_patients_by_phone(
                 """
             )
             .eq("clinic_id", clinic_id)
-            .or_(
-                f"phone_primary.eq.{clean_phone},phone_secondary.eq.{clean_phone}"
-            )
-            .order("full_name")
             .execute()
         )
 
-        patients = result.data or []
+        all_patients = result.data or []
+
+        matched_patients = []
+
+        for patient in all_patients:
+            phone_primary = patient.get("phone_primary")
+            phone_secondary = patient.get("phone_secondary")
+
+            if phones_match(clean_phone, phone_primary) or phones_match(
+                clean_phone, phone_secondary
+            ):
+                matched_patients.append(patient)
 
         print(
-            f"Found patients by phone clinic_id={clinic_id}, phone={clean_phone}: {patients}"
+            f"Patient phone lookup result | searched={clean_phone} | digits={search_digits} | matched={matched_patients}"
         )
 
-        return patients
+        return matched_patients
 
     except Exception as e:
         print(f"Error finding patients by phone: {e}")
         return []
-    
+     
 def normalize_search_text(text: str | None) -> str:
     if not text:
         return ""

@@ -591,18 +591,40 @@ async def twilio_realtime(websocket: WebSocket):
                             print("Sent OpenAI session.update with clinic, patient context and booking tool")
                             realtime_session_ready = True
 
+                            if len(current_patient_candidates) == 1:
+                                patient_name = current_patient_candidates[0].get("full_name") or "this patient"
+
+                                initial_response_instructions = (
+                                    "Say exactly and only this sentence, with no extra words: "
+                                    f"Hello, thanks for calling Westview Dental. Are you calling for {patient_name}?"
+                                )
+
+                            elif len(current_patient_candidates) > 1:
+                                patient_names = [
+                                    patient.get("full_name")
+                                    for patient in current_patient_candidates
+                                    if patient.get("full_name")
+                                ]
+
+                                names_text = ", ".join(patient_names)
+
+                                initial_response_instructions = (
+                                    "Say exactly and only this sentence, with no extra words: "
+                                    f"Hello, thanks for calling Westview Dental. Which patient is this for: {names_text}?"
+                                )
+
+                            else:
+                                initial_response_instructions = (
+                                    "Say exactly and only this sentence, with no extra words: "
+                                    "Hello, thanks for calling Westview Dental. What is the patient's full name?"
+                                )
+
                             await openai_ws.send(
                                 json.dumps(
                                     {
                                         "type": "response.create",
                                         "response": {
-                                            "instructions": (
-                                                "Greet the caller naturally as Westview Dental's AI receptionist. "
-                                                "Then follow the IMPORTANT PATIENT CONTEXT exactly. "
-                                                "If one existing patient was found, ask whether the caller is calling for that patient. "
-                                                "If multiple existing patients were found, ask which listed patient this is for. "
-                                                "If no existing patient was found, ask for the patient's full name."
-                                            )
+                                            "instructions": initial_response_instructions
                                         },
                                     }
                                 )
