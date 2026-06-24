@@ -518,7 +518,7 @@ async function handleChangeStatus(nextStatus: string) {
             </div>
 
             <form onSubmit={handleSaveChanges} className="space-y-5 p-5">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-1 gap-x-4 gap-y-5 md:grid-cols-3">
               <div>
                 <label className="text-sm font-medium text-slate-700">
                   Patient Name
@@ -581,7 +581,7 @@ async function handleChangeStatus(nextStatus: string) {
                 <select
                   value={urgency}
                   onChange={(event) => setUrgency(event.target.value)}
-                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
                 >
                   <option value="low">Low</option>
                   <option value="normal">Normal</option>

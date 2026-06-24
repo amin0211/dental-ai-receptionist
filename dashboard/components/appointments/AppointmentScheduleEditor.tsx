@@ -338,13 +338,6 @@ export default function AppointmentScheduleEditor({
   const [selectedPatientId, setSelectedPatientId] = useState(
     appointment?.patient_id || request?.patient_id || ""
   );
-  useEffect(() => {
-    if (mode !== "confirm") return;
-
-    if (request?.patient_id) {
-      setSelectedPatientId(request.patient_id);
-    }
-  }, [mode, request?.patient_id]);
 
   const [patientSearch, setPatientSearch] = useState("");
   const [isPatientDropdownOpen, setIsPatientDropdownOpen] = useState(false);
@@ -434,7 +427,6 @@ export default function AppointmentScheduleEditor({
       ? `/dashboard/patients?${queryString}`
       : "/dashboard/patients";
   }, [request?.patient_name, request?.patient_phone]);
-
 
   const filteredPatients = useMemo(() => {
     const query = patientSearch.trim().toLowerCase();
@@ -527,9 +519,7 @@ export default function AppointmentScheduleEditor({
 
           const slotId = `${dateString}:${slotStartTime}:${slotEndTime}`;
 
-          if (usedSlotKeys.has(slotId)) {
-            continue;
-          }
+          if (usedSlotKeys.has(slotId)) continue;
 
           usedSlotKeys.add(slotId);
 
@@ -573,6 +563,14 @@ export default function AppointmentScheduleEditor({
   }, [mode, request]);
 
   const selectedSlotIsBooked = Boolean(selectedSlot?.isBooked);
+
+  useEffect(() => {
+    if (mode !== "confirm") return;
+
+    if (request?.patient_id) {
+      setSelectedPatientId(request.patient_id);
+    }
+  }, [mode, request?.patient_id]);
 
   useEffect(() => {
     async function loadInitialData() {
@@ -656,12 +654,9 @@ export default function AppointmentScheduleEditor({
       setEditableServiceName("");
 
       const correctDuration =
-        appointment?.duration_minutes ||
-        request?.duration_minutes ||
-        30;
+        appointment?.duration_minutes || request?.duration_minutes || 30;
 
       setEditableDurationMinutes(String(correctDuration));
-
       return;
     }
 
@@ -1064,7 +1059,7 @@ export default function AppointmentScheduleEditor({
             </h3>
 
             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <div className="relative">
+              <div className="relative min-w-0">
                 <label className="text-sm font-medium text-slate-700">
                   Patient
                 </label>
@@ -1113,13 +1108,15 @@ export default function AppointmentScheduleEditor({
                 </div>
 
                 {mode === "confirm" &&
-                    !request?.patient_id &&
-                    !selectedPatientId &&
-                    request?.patient_name && (
+                  !request?.patient_id &&
+                  !selectedPatientId &&
+                  request?.patient_name && (
                     <div className="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
                       <p className="text-xs font-bold text-red-700">
                         AI extracted: {request.patient_name}
-                        {request.patient_phone ? ` — ${request.patient_phone}` : ""}
+                        {request.patient_phone
+                          ? ` — ${request.patient_phone}`
+                          : ""}
                       </p>
 
                       <p className="mt-1 text-xs text-red-600">
@@ -1241,7 +1238,7 @@ export default function AppointmentScheduleEditor({
                     setEditableDurationMinutes(event.target.value);
                     setSelectedSlot(null);
                   }}
-                  className="mt-2 w-full max-w-[220px] rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
                 />
               </div>
 
@@ -1284,7 +1281,7 @@ export default function AppointmentScheduleEditor({
                 <input
                   value={editableReason}
                   onChange={(event) => setEditableReason(event.target.value)}
-                  className="mt-2 w-full max-w-[220px] rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
                 />
               </div>
 
@@ -1295,7 +1292,7 @@ export default function AppointmentScheduleEditor({
                 <select
                   value={editableUrgency}
                   onChange={(event) => setEditableUrgency(event.target.value)}
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
                 >
                   <option value="low">Low</option>
                   <option value="normal">Normal</option>
@@ -1514,7 +1511,12 @@ export default function AppointmentScheduleEditor({
 
           <button
             type="button"
-            disabled={!selectedSlot || selectedSlotIsBooked || !selectedPatientId || isSaving}
+            disabled={
+              !selectedSlot ||
+              selectedSlotIsBooked ||
+              !selectedPatientId ||
+              isSaving
+            }
             onClick={handleSave}
             className="w-full rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
