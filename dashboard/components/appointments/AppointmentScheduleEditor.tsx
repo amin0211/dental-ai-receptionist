@@ -1058,7 +1058,7 @@ export default function AppointmentScheduleEditor({
               Appointment Details
             </h3>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
               <div className="relative min-w-0">
                 <label className="text-sm font-medium text-slate-700">
                   Patient
@@ -1250,7 +1250,7 @@ export default function AppointmentScheduleEditor({
                   value={selectedServiceId}
                   disabled={!selectedDoctorId || isLoadingDoctorServices}
                   onChange={(event) => handleServiceChange(event.target.value)}
-                  className="mt-2 h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
                 >
                   <option value="">
                     {isLoadingDoctorServices
@@ -1292,7 +1292,7 @@ export default function AppointmentScheduleEditor({
                 <select
                   value={editableUrgency}
                   onChange={(event) => setEditableUrgency(event.target.value)}
-                  className="mt-2 h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
                 >
                   <option value="low">Low</option>
                   <option value="normal">Normal</option>
