@@ -22,14 +22,18 @@ type DashboardStats = {
 type TodayAppointment = {
   id: string;
   clinic_id: string;
-  patient_name: string | null;
-  patient_phone: string | null;
+  patient_id: string | null;
   doctor_id: string | null;
   service_name: string | null;
   start_time: string;
   end_time: string;
   duration_minutes: number;
   notes: string | null;
+  patient: {
+    id: string;
+    full_name: string;
+    phone_primary: string;
+  } | null;
 };
 
 type ScheduleCellInfo = {
@@ -286,14 +290,18 @@ export default function DashboardPage() {
             `
             id,
             clinic_id,
-            patient_name,
-            patient_phone,
+            patient_id,
             doctor_id,
             service_name,
             start_time,
             end_time,
             duration_minutes,
-            notes
+            notes,
+            patient:patients (
+              id,
+              full_name,
+              phone_primary
+            )
           `
           )
           .eq("clinic_id", clinicId)
@@ -546,8 +554,14 @@ export default function DashboardPage() {
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <p className="truncate text-xs font-black text-slate-950">
-                                {appointment.patient_name || "Unknown patient"}
+                                {appointment.patient?.full_name || "Unknown patient"}
                               </p>
+
+                              {appointment.patient?.phone_primary && (
+                                <p className="mt-0.5 truncate text-[10px] font-semibold text-slate-400">
+                                  {appointment.patient.phone_primary}
+                                </p>
+                              )}
 
                               <p className="mt-0.5 truncate text-[11px] font-bold text-blue-700">
                                 {appointment.service_name || "Appointment"}

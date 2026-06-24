@@ -284,6 +284,7 @@ function CallsPageContent() {
       await updateCallExtractionReview({
         id: selectedCall.id,
         clinicId,
+        patientId: selectedCall.patient_id,
         patientName: patientName.trim() ? patientName.trim() : null,
         patientPhone: patientPhone.trim() ? patientPhone.trim() : null,
         serviceCategory: serviceCategory.trim() ? serviceCategory.trim() : null,

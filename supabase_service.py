@@ -17,6 +17,52 @@ def normalize_phone(phone: str | None) -> str:
         return ""
     return phone.strip()
 
+
+def find_patients_by_phone(
+    clinic_id: str | None,
+    phone: str | None,
+) -> list[dict]:
+    if not supabase or not clinic_id or not phone:
+        print("Cannot find patients by phone: missing supabase, clinic_id, or phone")
+        return []
+
+    clean_phone = normalize_phone(phone)
+
+    try:
+        result = (
+            supabase.table("patients")
+            .select(
+                """
+                id,
+                clinic_id,
+                full_name,
+                phone_primary,
+                phone_secondary,
+                email,
+                date_of_birth,
+                notes
+                """
+            )
+            .eq("clinic_id", clinic_id)
+            .or_(
+                f"phone_primary.eq.{clean_phone},phone_secondary.eq.{clean_phone}"
+            )
+            .order("full_name")
+            .execute()
+        )
+
+        patients = result.data or []
+
+        print(
+            f"Found patients by phone clinic_id={clinic_id}, phone={clean_phone}: {patients}"
+        )
+
+        return patients
+
+    except Exception as e:
+        print(f"Error finding patients by phone: {e}")
+        return []
+    
 def normalize_search_text(text: str | None) -> str:
     if not text:
         return ""
@@ -133,6 +179,7 @@ def create_appointment_request(
     patient_phone: str | None,
     reason: str | None,
     urgency: str | None = "normal",
+    patient_id: str | None = None,
     patient_name: str | None = None,
     preferred_time: str | None = None,
     status: str = "new",
@@ -147,6 +194,7 @@ def create_appointment_request(
         payload = {
             "clinic_id": clinic_id,
             "call_id": call_id,
+            "patient_id": patient_id,
             "patient_phone": normalize_phone(patient_phone),
             "patient_name": patient_name,
             "reason": reason or "",
@@ -230,6 +278,7 @@ def save_call_extraction(
     raw_transcript: str | None = None,
     cleaned_transcript: str | None = None,
     detected_language: str | None = None,
+    patient_id: str | None = None,
     patient_name: str | None = None,
     service_category: str | None = None,
     canonical_reason: str | None = None,
@@ -255,6 +304,7 @@ def save_call_extraction(
             "raw_transcript": raw_transcript,
             "cleaned_transcript": cleaned_transcript,
             "detected_language": detected_language,
+            "patient_id": patient_id,
             "patient_name": patient_name,
             "service_category": service_category,
             "canonical_reason": canonical_reason,

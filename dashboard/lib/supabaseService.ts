@@ -939,6 +939,7 @@ export type CallExtraction = {
   id: string;
   clinic_id: string | null;
   call_id: string | null;
+  patient_id: string | null;
   raw_transcript: string | null;
   cleaned_transcript: string | null;
   detected_language: string | null;
@@ -968,6 +969,7 @@ export type CallExtraction = {
 export type UpdateCallExtractionReviewInput = {
   id: string;
   clinicId: string;
+  patientId: string | null;
   patientName: string | null;
   patientPhone: string | null;
   serviceCategory: string | null;
@@ -1000,6 +1002,7 @@ export async function getCallExtractions({
       id,
       clinic_id,
       call_id,
+      patient_id,
       raw_transcript,
       cleaned_transcript,
       detected_language,
@@ -1071,6 +1074,7 @@ export async function getCallExtractionById({
       id,
       clinic_id,
       call_id,
+      patient_id,
       raw_transcript,
       cleaned_transcript,
       detected_language,
@@ -1114,6 +1118,7 @@ export async function updateCallExtractionReview(
   const { error } = await supabase
     .from("call_extractions")
     .update({
+      patient_id: input.patientId,
       patient_name: input.patientName,
       patient_phone: input.patientPhone,
       service_category: input.serviceCategory,
@@ -1160,8 +1165,7 @@ export type Appointment = {
   id: string;
   clinic_id: string;
   appointment_request_id: string | null;
-  patient_name: string | null;
-  patient_phone: string | null;
+  patient_id: string | null;
   doctor_id: string | null;
   service_category_id: string | null;
   service_name: string | null;
@@ -1171,6 +1175,7 @@ export type Appointment = {
   end_time: string;
   duration_minutes: number;
   status: string;
+  source: string;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -1179,8 +1184,7 @@ export type Appointment = {
 export type CreateAppointmentFromRequestInput = {
   clinicId: string;
   appointmentRequestId: string;
-  patientName: string | null;
-  patientPhone: string | null;
+  patientId: string | null;
   doctorId: string;
   serviceCategoryId: string | null;
   serviceName: string | null;
@@ -1188,8 +1192,8 @@ export type CreateAppointmentFromRequestInput = {
   endTime: string;
   durationMinutes: number;
   notes: string | null;
-    reason: string | null;
-    urgency: string | null;  
+  reason: string | null;
+  urgency: string | null;
 };
 
 export async function getDoctorAppointmentsForRange({
@@ -1210,8 +1214,7 @@ export async function getDoctorAppointmentsForRange({
       id,
       clinic_id,
       appointment_request_id,
-      patient_name,
-      patient_phone,
+      patient_id,
       doctor_id,
       service_category_id,
       service_name,
@@ -1249,8 +1252,7 @@ export async function createAppointmentFromRequest(
     .insert({
       clinic_id: input.clinicId,
       appointment_request_id: input.appointmentRequestId,
-      patient_name: input.patientName,
-      patient_phone: input.patientPhone,
+      patient_id: input.patientId,
       doctor_id: input.doctorId,
       service_category_id: input.serviceCategoryId,
       service_name: input.serviceName,
@@ -1260,8 +1262,8 @@ export async function createAppointmentFromRequest(
       status: "confirmed",
       source: "ai_request",
       notes: input.notes,
-        reason: input.reason,
-        urgency: input.urgency,
+      reason: input.reason,
+      urgency: input.urgency,
     })
     .select("id")
     .single();
@@ -1290,8 +1292,7 @@ export async function createAppointmentFromRequest(
 export type UpdateAppointmentInput = {
   clinicId: string;
   appointmentId: string;
-  patientName: string | null;
-  patientPhone: string | null;
+  patientId: string | null;
   doctorId: string;
   serviceCategoryId: string;
   serviceName: string | null;
@@ -1307,8 +1308,7 @@ export async function updateAppointment(input: UpdateAppointmentInput) {
   const { data, error } = await supabase
     .from("appointments")
     .update({
-      patient_name: input.patientName,
-      patient_phone: input.patientPhone,
+      patient_id: input.patientId,
       doctor_id: input.doctorId,
       service_category_id: input.serviceCategoryId,
       service_name: input.serviceName,
@@ -1330,4 +1330,258 @@ export async function updateAppointment(input: UpdateAppointmentInput) {
   }
 
   return data;
+}
+
+export type Patient = {
+  id: string;
+  clinic_id: string;
+  full_name: string;
+  phone_primary: string;
+  phone_secondary: string | null;
+  email: string | null;
+  date_of_birth: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  city: string | null;
+  province: string | null;
+  postal_code: string | null;
+  country: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreatePatientInput = {
+  clinicId: string;
+  fullName: string;
+  phonePrimary: string;
+  phoneSecondary: string | null;
+  email: string | null;
+  dateOfBirth: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  country: string | null;
+  notes: string | null;
+};
+
+export type UpdatePatientInput = CreatePatientInput & {
+  id: string;
+};
+
+function normalizePatientPhone(phone: string | null) {
+  if (!phone) return null;
+  return phone.trim().replace(/\s+/g, "");
+}
+
+export async function getPatients(clinicId: string) {
+  const { data, error } = await supabase
+    .from("patients")
+    .select(
+      `
+      id,
+      clinic_id,
+      full_name,
+      phone_primary,
+      phone_secondary,
+      email,
+      date_of_birth,
+      address_line1,
+      address_line2,
+      city,
+      province,
+      postal_code,
+      country,
+      notes,
+      created_at,
+      updated_at
+    `
+    )
+    .eq("clinic_id", clinicId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data || []) as Patient[];
+}
+
+export async function searchPatients({
+  clinicId,
+  query,
+}: {
+  clinicId: string;
+  query: string;
+}) {
+  const cleanQuery = query.trim();
+
+  if (!cleanQuery) {
+    return getPatients(clinicId);
+  }
+
+  const safeQuery = cleanQuery.replace(/[%_]/g, "");
+
+  const { data, error } = await supabase
+    .from("patients")
+    .select(
+      `
+      id,
+      clinic_id,
+      full_name,
+      phone_primary,
+      phone_secondary,
+      email,
+      date_of_birth,
+      address_line1,
+      address_line2,
+      city,
+      province,
+      postal_code,
+      country,
+      notes,
+      created_at,
+      updated_at
+    `
+    )
+    .eq("clinic_id", clinicId)
+    .or(
+      [
+        `full_name.ilike.%${safeQuery}%`,
+        `phone_primary.ilike.%${safeQuery}%`,
+        `phone_secondary.ilike.%${safeQuery}%`,
+        `email.ilike.%${safeQuery}%`,
+        `postal_code.ilike.%${safeQuery}%`,
+        `notes.ilike.%${safeQuery}%`,
+      ].join(",")
+    )
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data || []) as Patient[];
+}
+
+export async function createPatient(input: CreatePatientInput) {
+  const { data, error } = await supabase
+    .from("patients")
+    .insert({
+      clinic_id: input.clinicId,
+      full_name: input.fullName.trim(),
+      phone_primary: normalizePatientPhone(input.phonePrimary),
+      phone_secondary: normalizePatientPhone(input.phoneSecondary),
+      email: input.email?.trim() || null,
+      date_of_birth: input.dateOfBirth || null,
+      address_line1: input.addressLine1?.trim() || null,
+      address_line2: input.addressLine2?.trim() || null,
+      city: input.city?.trim() || null,
+      province: input.province?.trim() || null,
+      postal_code: input.postalCode?.trim() || null,
+      country: input.country?.trim() || "Canada",
+      notes: input.notes?.trim() || null,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data.id as string;
+}
+
+export async function updatePatient(input: UpdatePatientInput) {
+  const { error } = await supabase
+    .from("patients")
+    .update({
+      full_name: input.fullName.trim(),
+      phone_primary: normalizePatientPhone(input.phonePrimary),
+      phone_secondary: normalizePatientPhone(input.phoneSecondary),
+      email: input.email?.trim() || null,
+      date_of_birth: input.dateOfBirth || null,
+      address_line1: input.addressLine1?.trim() || null,
+      address_line2: input.addressLine2?.trim() || null,
+      city: input.city?.trim() || null,
+      province: input.province?.trim() || null,
+      postal_code: input.postalCode?.trim() || null,
+      country: input.country?.trim() || "Canada",
+      notes: input.notes?.trim() || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.id)
+    .eq("clinic_id", input.clinicId);
+
+  if (error) {
+    if (error.message.includes("patients_clinic_phone_unique")) {
+      throw new Error("A patient with this primary phone already exists.");
+    }
+
+    throw new Error(error.message);
+  }
+}
+
+export async function deletePatient({
+  id,
+  clinicId,
+}: {
+  id: string;
+  clinicId: string;
+}) {
+  const { error } = await supabase
+    .from("patients")
+    .delete()
+    .eq("id", id)
+    .eq("clinic_id", clinicId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function getPatientByPhone({
+  clinicId,
+  phonePrimary,
+}: {
+  clinicId: string;
+  phonePrimary: string;
+}) {
+  const phone = normalizePatientPhone(phonePrimary);
+
+  if (!phone) return null;
+
+  const { data, error } = await supabase
+    .from("patients")
+    .select(
+      `
+      id,
+      clinic_id,
+      full_name,
+      phone_primary,
+      phone_secondary,
+      email,
+      date_of_birth,
+      address_line1,
+      address_line2,
+      city,
+      province,
+      postal_code,
+      country,
+      notes,
+      created_at,
+      updated_at
+    `
+    )
+    .eq("clinic_id", clinicId)
+    .eq("phone_primary", phone)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as Patient | null;
 }

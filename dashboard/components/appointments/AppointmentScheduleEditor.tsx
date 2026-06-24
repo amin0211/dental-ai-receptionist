@@ -7,6 +7,7 @@ import {
   CalendarAvailabilityException,
   CalendarAvailabilityRule,
   ClinicDoctor,
+  Patient,
   ServiceCategory,
   createAppointmentFromRequest,
   getCalendarAvailabilityExceptions,
@@ -14,12 +15,14 @@ import {
   getClinicDoctorServices,
   getClinicDoctors,
   getDoctorAppointmentsForRange,
+  getPatients,
   getServiceCategories,
   updateAppointment,
 } from "@/lib/supabaseService";
 
 type RequestForSchedule = {
   id: string;
+  patient_id?: string | null;
   patient_name: string | null;
   patient_phone: string | null;
   reason: string | null;
@@ -146,65 +149,86 @@ function getDateLabel(date: Date) {
   });
 }
 
-function getInitialWeekStartFromAppointment(appointment?: Appointment | null) {
-  if (!appointment) return getWeekStart(new Date());
-  return getWeekStart(new Date(appointment.start_time));
-}
-
 function normalizePreferredDate(value?: string | null) {
   if (!value) return "";
 
-  const trimmed = value.trim();
+  let trimmed = value.trim();
+
+  if (!trimmed) return "";
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     return trimmed;
   }
 
-  const fullDateMatch = trimmed.match(/^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})$/);
-
-  if (fullDateMatch) {
-    return `${fullDateMatch[1]}-${fullDateMatch[2].padStart(
-      2,
-      "0"
-    )}-${fullDateMatch[3].padStart(2, "0")}`;
-  }
-
-  const monthDayMatch = trimmed.match(
-    /^(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+(\d{1,2})$/i
+  const fullNumericDateMatch = trimmed.match(
+    /^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})$/
   );
 
-  if (monthDayMatch) {
-    const monthMap: Record<string, number> = {
-      jan: 1,
-      january: 1,
-      feb: 2,
-      february: 2,
-      mar: 3,
-      march: 3,
-      apr: 4,
-      april: 4,
-      may: 5,
-      jun: 6,
-      june: 6,
-      jul: 7,
-      july: 7,
-      aug: 8,
-      august: 8,
-      sep: 9,
-      sept: 9,
-      september: 9,
-      oct: 10,
-      october: 10,
-      nov: 11,
-      november: 11,
-      dec: 12,
-      december: 12,
-    };
+  if (fullNumericDateMatch) {
+    return `${fullNumericDateMatch[1]}-${fullNumericDateMatch[2].padStart(
+      2,
+      "0"
+    )}-${fullNumericDateMatch[3].padStart(2, "0")}`;
+  }
 
-    const monthName = monthDayMatch[1].toLowerCase();
+  trimmed = trimmed.replace(
+    /^(sun|sunday|mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday),?\s+/i,
+    ""
+  );
+
+  trimmed = trimmed.replace(/(\d{1,2})(st|nd|rd|th)/i, "$1");
+
+  const currentYear = new Date().getFullYear();
+
+  const monthMap: Record<string, number> = {
+    jan: 1,
+    january: 1,
+    feb: 2,
+    february: 2,
+    mar: 3,
+    march: 3,
+    apr: 4,
+    april: 4,
+    may: 5,
+    jun: 6,
+    june: 6,
+    jul: 7,
+    july: 7,
+    aug: 8,
+    august: 8,
+    sep: 9,
+    sept: 9,
+    september: 9,
+    oct: 10,
+    october: 10,
+    nov: 11,
+    november: 11,
+    dec: 12,
+    december: 12,
+  };
+
+  const monthDayYearMatch = trimmed.match(
+    /^(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+(\d{1,2})(?:,\s*(\d{4}))?$/i
+  );
+
+  if (monthDayYearMatch) {
+    const monthName = monthDayYearMatch[1].toLowerCase();
+    const day = monthDayYearMatch[2].padStart(2, "0");
+    const year = monthDayYearMatch[3] || String(currentYear);
     const month = String(monthMap[monthName]).padStart(2, "0");
-    const day = monthDayMatch[2].padStart(2, "0");
-    const year = new Date().getFullYear();
+
+    return `${year}-${month}-${day}`;
+  }
+
+  const dayMonthYearMatch = trimmed.match(
+    /^(\d{1,2})\s+(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)(?:\s+(\d{4}))?$/i
+  );
+
+  if (dayMonthYearMatch) {
+    const day = dayMonthYearMatch[1].padStart(2, "0");
+    const monthName = dayMonthYearMatch[2].toLowerCase();
+    const year = dayMonthYearMatch[3] || String(currentYear);
+    const month = String(monthMap[monthName]).padStart(2, "0");
 
     return `${year}-${month}-${day}`;
   }
@@ -216,12 +240,16 @@ function normalizePreferredTime(value?: string | null) {
   if (!value) return "";
 
   const trimmed = value.trim().toLowerCase();
-  const timeRangeStart = trimmed.split("-")[0].trim();
 
-  const twentyFourHourMatch = timeRangeStart.match(/^(\d{1,2}):(\d{2})/);
+  const timeRangeStart = trimmed.split(/\s+to\s+|-/i)[0].trim();
 
-  if (twentyFourHourMatch && !timeRangeStart.includes("am") && !timeRangeStart.includes("pm")) {
-    return `${twentyFourHourMatch[1].padStart(2, "0")}:${twentyFourHourMatch[2]}`;
+  const twentyFourHourMatch = timeRangeStart.match(/^(\d{1,2}):(\d{2})$/);
+
+  if (twentyFourHourMatch) {
+    return `${twentyFourHourMatch[1].padStart(
+      2,
+      "0"
+    )}:${twentyFourHourMatch[2]}`;
   }
 
   const twelveHourMatch = timeRangeStart.match(
@@ -279,6 +307,11 @@ function getLocalTimeStringFromIso(value: string) {
   return `${hours}:${minutes}`;
 }
 
+function getPatientLabel(patient: Patient | null) {
+  if (!patient) return "Select patient";
+  return `${patient.full_name} — ${patient.phone_primary}`;
+}
+
 export default function AppointmentScheduleEditor({
   mode,
   clinicId,
@@ -296,9 +329,17 @@ export default function AppointmentScheduleEditor({
 }) {
   const [doctors, setDoctors] = useState<ClinicDoctor[]>([]);
   const [allServices, setAllServices] = useState<ServiceCategory[]>([]);
+  const [patients, setPatients] = useState<Patient[]>([]);
   const [doctorServiceRows, setDoctorServiceRows] = useState<DoctorServiceRow[]>(
     []
   );
+
+  const [selectedPatientId, setSelectedPatientId] = useState(
+    appointment?.patient_id || request?.patient_id || ""
+  );
+
+  const [patientSearch, setPatientSearch] = useState("");
+  const [isPatientDropdownOpen, setIsPatientDropdownOpen] = useState(false);
 
   const [selectedDoctorId, setSelectedDoctorId] = useState(
     appointment?.doctor_id || request?.doctor_id || ""
@@ -321,21 +362,18 @@ export default function AppointmentScheduleEditor({
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [notes, setNotes] = useState(appointment?.notes || "");
 
-  const [editablePatientName, setEditablePatientName] = useState(
-    appointment?.patient_name || request?.patient_name || ""
-  );
-  const [editablePatientPhone, setEditablePatientPhone] = useState(
-    appointment?.patient_phone || request?.patient_phone || ""
-  );
   const [editableReason, setEditableReason] = useState(
     appointment?.reason || request?.reason || ""
   );
+
   const [editableServiceName, setEditableServiceName] = useState(
     appointment?.service_name || request?.service_category_name || ""
   );
+
   const [editableUrgency, setEditableUrgency] = useState(
     appointment?.urgency || request?.urgency || "normal"
   );
+
   const [editableDurationMinutes, setEditableDurationMinutes] = useState(
     String(appointment?.duration_minutes || request?.duration_minutes || 30)
   );
@@ -367,6 +405,25 @@ export default function AppointmentScheduleEditor({
     return map;
   }, [doctors]);
 
+  const selectedPatient = useMemo(() => {
+    return patients.find((patient) => patient.id === selectedPatientId) || null;
+  }, [patients, selectedPatientId]);
+
+  const filteredPatients = useMemo(() => {
+    const query = patientSearch.trim().toLowerCase();
+
+    if (!query) return patients;
+
+    return patients.filter((patient) => {
+      return (
+        patient.full_name.toLowerCase().includes(query) ||
+        patient.phone_primary.toLowerCase().includes(query) ||
+        patient.phone_secondary?.toLowerCase().includes(query) ||
+        patient.email?.toLowerCase().includes(query)
+      );
+    });
+  }, [patients, patientSearch]);
+
   const availableServicesForDoctor = useMemo(() => {
     if (!selectedDoctorId) return [];
 
@@ -395,6 +452,8 @@ export default function AppointmentScheduleEditor({
     weekDays.forEach((day) => {
       const dateString = formatDate(day);
       map[dateString] = [];
+
+      const usedSlotKeys = new Set<string>();
 
       rules.forEach((rule) => {
         if (!appliesToDate(rule, day)) return;
@@ -439,8 +498,16 @@ export default function AppointmentScheduleEditor({
               })
             ) || null;
 
+          const slotId = `${dateString}:${slotStartTime}:${slotEndTime}`;
+
+          if (usedSlotKeys.has(slotId)) {
+            continue;
+          }
+
+          usedSlotKeys.add(slotId);
+
           map[dateString].push({
-            id: `${dateString}:${slotStartTime}`,
+            id: slotId,
             date: dateString,
             startTime: slotStartTime,
             endTime: slotEndTime,
@@ -465,22 +532,36 @@ export default function AppointmentScheduleEditor({
   ]);
 
   const allSlotsForWeek = useMemo(() => {
-  return Object.values(slotsByDate).flat();
+    return Object.values(slotsByDate).flat();
   }, [slotsByDate]);
 
-  
+  const preferredDateFromRequest = useMemo(() => {
+    if (mode !== "confirm" || !request) return "";
+    return normalizePreferredDate(request.preferred_date_raw);
+  }, [mode, request]);
+
+  const preferredTimeFromRequest = useMemo(() => {
+    if (mode !== "confirm" || !request) return "";
+    return normalizePreferredTime(request.preferred_time_raw);
+  }, [mode, request]);
+
+  const selectedSlotIsBooked = Boolean(selectedSlot?.isBooked);
+
   useEffect(() => {
     async function loadInitialData() {
       try {
         setErrorMessage("");
 
-        const [loadedDoctors, loadedServices] = await Promise.all([
-          getClinicDoctors(clinicId),
-          getServiceCategories(clinicId),
-        ]);
+        const [loadedDoctors, loadedServices, loadedPatients] =
+          await Promise.all([
+            getClinicDoctors(clinicId),
+            getServiceCategories(clinicId),
+            getPatients(clinicId),
+          ]);
 
         setDoctors(loadedDoctors);
         setAllServices(loadedServices);
+        setPatients(loadedPatients);
 
         if (!selectedDoctorId && loadedDoctors.length > 0) {
           setSelectedDoctorId(loadedDoctors[0].id);
@@ -490,7 +571,7 @@ export default function AppointmentScheduleEditor({
         setErrorMessage(
           error instanceof Error
             ? error.message
-            : "Failed to load doctors and services."
+            : "Failed to load doctors, services, and patients."
         );
       }
     }
@@ -546,8 +627,14 @@ export default function AppointmentScheduleEditor({
     if (availableServicesForDoctor.length === 0) {
       setSelectedServiceId("");
       setEditableServiceName("");
-      setEditableDurationMinutes("30");
-      setSelectedSlot(null);
+
+      const correctDuration =
+        appointment?.duration_minutes ||
+        request?.duration_minutes ||
+        30;
+
+      setEditableDurationMinutes(String(correctDuration));
+
       return;
     }
 
@@ -599,11 +686,13 @@ export default function AppointmentScheduleEditor({
       setSelectedServiceId(matchedService.id);
       setEditableServiceName(matchedService.name);
 
-      if (!appointment) {
-        setEditableDurationMinutes(
-          String(matchedService.default_duration_minutes || 30)
-        );
-      }
+      const correctDuration =
+        appointment?.duration_minutes ||
+        request?.duration_minutes ||
+        matchedService.default_duration_minutes ||
+        30;
+
+      setEditableDurationMinutes(String(correctDuration));
 
       if (matchedService.default_urgency && !editableUrgency) {
         setEditableUrgency(matchedService.default_urgency);
@@ -613,14 +702,12 @@ export default function AppointmentScheduleEditor({
         setEditableReason(matchedService.canonical_reason);
       }
 
-      setSelectedSlot(null);
       return;
     }
 
     setSelectedServiceId("");
     setEditableServiceName("");
     setEditableDurationMinutes("30");
-    setSelectedSlot(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     selectedDoctorId,
@@ -637,7 +724,7 @@ export default function AppointmentScheduleEditor({
     const endTime = getLocalTimeStringFromIso(appointment.end_time);
 
     setSelectedSlot({
-      id: `${dateString}:${startTime}`,
+      id: `${dateString}:${startTime}:${endTime}`,
       date: dateString,
       startTime,
       endTime,
@@ -647,28 +734,6 @@ export default function AppointmentScheduleEditor({
       bookedAppointment: null,
     });
   }, [mode, appointment]);
-
-  useEffect(() => {
-  if (mode !== "confirm") return;
-  if (!request) return;
-  if (selectedSlot) return;
-  if (allSlotsForWeek.length === 0) return;
-
-  const preferredDate = normalizePreferredDate(request.preferred_date_raw);
-  const preferredTime = normalizePreferredTime(request.preferred_time_raw);
-
-  if (!preferredDate || !preferredTime) return;
-
-  const matchedSlot = allSlotsForWeek.find(
-    (slot) =>
-      !slot.isBooked &&
-      slot.date === preferredDate &&
-      slot.startTime === preferredTime
-  );
-  if (!matchedSlot) return;
-
-  setSelectedSlot(matchedSlot);
-}, [mode, request, allSlotsForWeek, selectedSlot]);
 
   useEffect(() => {
     async function loadSchedule() {
@@ -733,6 +798,33 @@ export default function AppointmentScheduleEditor({
     weekDays,
   ]);
 
+  useEffect(() => {
+    if (mode !== "confirm") return;
+    if (!request) return;
+    if (selectedSlot) return;
+    if (!preferredDateFromRequest || !preferredTimeFromRequest) return;
+    if (allSlotsForWeek.length === 0) return;
+
+    const matchedSlot =
+      allSlotsForWeek.find((slot) => {
+        return (
+          slot.date === preferredDateFromRequest &&
+          slot.startTime === preferredTimeFromRequest
+        );
+      }) || null;
+
+    if (!matchedSlot) return;
+
+    setSelectedSlot(matchedSlot);
+  }, [
+    mode,
+    request,
+    selectedSlot,
+    preferredDateFromRequest,
+    preferredTimeFromRequest,
+    allSlotsForWeek,
+  ]);
+
   function handleServiceChange(serviceId: string) {
     setSelectedServiceId(serviceId);
     setSelectedSlot(null);
@@ -772,6 +864,11 @@ export default function AppointmentScheduleEditor({
       return;
     }
 
+    if (!selectedPatientId) {
+      setErrorMessage("Select a patient first.");
+      return;
+    }
+
     const selectedServiceAllowed = availableServicesForDoctor.some(
       (service) => service.id === selectedServiceId
     );
@@ -784,8 +881,15 @@ export default function AppointmentScheduleEditor({
       return;
     }
 
-    if (!selectedSlot) {
+    const slotToSave = selectedSlot;
+
+    if (!slotToSave) {
       setErrorMessage("Select an available slot first.");
+      return;
+    }
+
+    if (slotToSave.isBooked) {
+      setErrorMessage("This slot is already booked. Choose another available slot.");
       return;
     }
 
@@ -806,12 +910,7 @@ export default function AppointmentScheduleEditor({
         const { error: updateRequestError } = await supabase
           .from("appointment_requests")
           .update({
-            patient_name: editablePatientName.trim()
-              ? editablePatientName.trim()
-              : null,
-            patient_phone: editablePatientPhone.trim()
-              ? editablePatientPhone.trim()
-              : null,
+            patient_id: selectedPatientId,
             reason: editableReason.trim() ? editableReason.trim() : null,
             service_category_id: selectedServiceId,
             service_category_name: editableServiceName.trim()
@@ -830,12 +929,7 @@ export default function AppointmentScheduleEditor({
         await createAppointmentFromRequest({
           clinicId,
           appointmentRequestId: request.id,
-          patientName: editablePatientName.trim()
-            ? editablePatientName.trim()
-            : null,
-          patientPhone: editablePatientPhone.trim()
-            ? editablePatientPhone.trim()
-            : null,
+          patientId: selectedPatientId,
           doctorId: selectedDoctorId,
           serviceCategoryId: selectedServiceId,
           serviceName: editableServiceName.trim()
@@ -843,8 +937,8 @@ export default function AppointmentScheduleEditor({
             : null,
           reason: editableReason.trim() ? editableReason.trim() : null,
           urgency: editableUrgency,
-          startTime: selectedSlot.startDateTime.toISOString(),
-          endTime: selectedSlot.endDateTime.toISOString(),
+          startTime: slotToSave.startDateTime.toISOString(),
+          endTime: slotToSave.endDateTime.toISOString(),
           durationMinutes,
           notes: notes.trim() ? notes.trim() : null,
         });
@@ -858,12 +952,7 @@ export default function AppointmentScheduleEditor({
         await updateAppointment({
           clinicId,
           appointmentId: appointment.id,
-          patientName: editablePatientName.trim()
-            ? editablePatientName.trim()
-            : null,
-          patientPhone: editablePatientPhone.trim()
-            ? editablePatientPhone.trim()
-            : null,
+          patientId: selectedPatientId,
           doctorId: selectedDoctorId,
           serviceCategoryId: selectedServiceId,
           serviceName: editableServiceName.trim()
@@ -871,8 +960,8 @@ export default function AppointmentScheduleEditor({
             : null,
           reason: editableReason.trim() ? editableReason.trim() : null,
           urgency: editableUrgency,
-          startTime: selectedSlot.startDateTime.toISOString(),
-          endTime: selectedSlot.endDateTime.toISOString(),
+          startTime: slotToSave.startDateTime.toISOString(),
+          endTime: slotToSave.endDateTime.toISOString(),
           durationMinutes,
           notes: notes.trim() ? notes.trim() : null,
         });
@@ -910,18 +999,19 @@ export default function AppointmentScheduleEditor({
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 p-5">
           <div>
             <h2 className="text-lg font-bold text-slate-900">{editorTitle}</h2>
+
             <p className="mt-1 text-sm text-slate-500">
               {mode === "confirm"
                 ? "Choose an available doctor slot and confirm this request."
-                : "Edit patient details, service, doctor, and appointment time."}
+                : "Edit patient, service, doctor, and appointment time."}
             </p>
 
             <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
               <span className="font-semibold">Patient:</span>{" "}
-              {editablePatientName || "Unknown"}{" "}
+              {selectedPatient?.full_name || request?.patient_name || "Unknown"}
               <span className="mx-2 text-slate-300">|</span>
               <span className="font-semibold">Phone:</span>{" "}
-              {editablePatientPhone || "-"}
+              {selectedPatient?.phone_primary || request?.patient_phone || "-"}
             </div>
           </div>
 
@@ -946,31 +1036,133 @@ export default function AppointmentScheduleEditor({
               Appointment Details
             </h3>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
-              <div>
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-[minmax(340px,1.4fr)_minmax(240px,1fr)_120px]">
+              <div className="relative">
                 <label className="text-sm font-medium text-slate-700">
-                  Patient Name
+                  Patient
                 </label>
-                <input
-                  value={editablePatientName}
-                  onChange={(event) =>
-                    setEditablePatientName(event.target.value)
-                  }
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
-                />
-              </div>
 
-              <div>
-                <label className="text-sm font-medium text-slate-700">
-                  Patient Phone
-                </label>
-                <input
-                  value={editablePatientPhone}
-                  onChange={(event) =>
-                    setEditablePatientPhone(event.target.value)
-                  }
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
-                />
+                <div className="mt-2 flex w-full overflow-hidden rounded-xl border border-slate-300 bg-white transition focus-within:border-blue-500 hover:border-blue-400">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setIsPatientDropdownOpen((current) => !current)
+                    }
+                    className="flex min-w-0 flex-1 items-center justify-between px-4 py-3 text-left text-sm outline-none"
+                  >
+                    <span
+                      className={`truncate ${
+                        selectedPatient
+                          ? "font-medium text-slate-900"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {getPatientLabel(selectedPatient)}
+                    </span>
+
+                    <span className="ml-3 shrink-0 text-slate-400">
+                      {isPatientDropdownOpen ? "▲" : "▼"}
+                    </span>
+                  </button>
+
+                  {selectedPatientId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPatientId("");
+                        setPatientSearch("");
+                        setIsPatientDropdownOpen(false);
+                      }}
+                      className="border-l border-slate-200 px-3 text-sm font-bold text-slate-400 hover:bg-red-50 hover:text-red-600"
+                      title="Clear selected patient"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
+                {mode === "confirm" &&
+                  !selectedPatientId &&
+                  request?.patient_name && (
+                    <p className="mt-2 text-xs font-medium text-amber-700">
+                      AI extracted: {request.patient_name}
+                      {request.patient_phone
+                        ? ` — ${request.patient_phone}`
+                        : ""}
+                    </p>
+                  )}
+
+                {isPatientDropdownOpen && (
+                  <div className="absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                    <div className="border-b border-slate-100 p-3">
+                      <input
+                        autoFocus
+                        value={patientSearch}
+                        onChange={(event) =>
+                          setPatientSearch(event.target.value)
+                        }
+                        placeholder="Search by name, phone, or email..."
+                        className="w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-2.5 text-sm outline-none focus:border-blue-500 focus:bg-white"
+                      />
+                    </div>
+
+                    <div className="max-h-72 overflow-y-auto p-2">
+                      {filteredPatients.length === 0 && (
+                        <div className="px-3 py-5 text-center text-sm text-slate-500">
+                          No patients found.
+                        </div>
+                      )}
+
+                      {filteredPatients.map((patient) => {
+                        const isSelected = patient.id === selectedPatientId;
+
+                        return (
+                          <button
+                            key={patient.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedPatientId(patient.id);
+                              setPatientSearch("");
+                              setIsPatientDropdownOpen(false);
+                            }}
+                            className={`w-full rounded-xl px-3 py-3 text-left transition ${
+                              isSelected
+                                ? "bg-blue-50 ring-1 ring-blue-200"
+                                : "hover:bg-slate-50"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-bold text-slate-900">
+                                  {patient.full_name}
+                                </p>
+
+                                <p className="mt-1 text-xs font-medium text-slate-500">
+                                  {patient.phone_primary}
+                                  {patient.phone_secondary
+                                    ? ` · ${patient.phone_secondary}`
+                                    : ""}
+                                </p>
+
+                                {patient.email && (
+                                  <p className="mt-1 truncate text-xs text-slate-400">
+                                    {patient.email}
+                                  </p>
+                                )}
+                              </div>
+
+                              {isSelected && (
+                                <span className="rounded-full bg-blue-600 px-2 py-1 text-[10px] font-bold text-white">
+                                  Selected
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -992,6 +1184,22 @@ export default function AppointmentScheduleEditor({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Duration
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={editableDurationMinutes}
+                  onChange={(event) => {
+                    setEditableDurationMinutes(event.target.value);
+                    setSelectedSlot(null);
+                  }}
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-blue-500"
+                />
               </div>
 
               <div>
@@ -1052,23 +1260,30 @@ export default function AppointmentScheduleEditor({
                   <option value="emergency">Emergency</option>
                 </select>
               </div>
-
-              <div>
-                <label className="text-sm font-medium text-slate-700">
-                  Duration
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  value={editableDurationMinutes}
-                  onChange={(event) => {
-                    setEditableDurationMinutes(event.target.value);
-                    setSelectedSlot(null);
-                  }}
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
-                />
-              </div>
             </div>
+
+            {selectedPatient && (
+              <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
+                <p className="font-bold text-slate-900">
+                  {selectedPatient.full_name}
+                </p>
+                <p className="mt-1 text-slate-600">
+                  Primary phone: {selectedPatient.phone_primary}
+                </p>
+
+                {selectedPatient.phone_secondary && (
+                  <p className="mt-1 text-slate-600">
+                    Secondary phone: {selectedPatient.phone_secondary}
+                  </p>
+                )}
+
+                {selectedPatient.email && (
+                  <p className="mt-1 text-slate-600">
+                    Email: {selectedPatient.email}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-4">
@@ -1160,15 +1375,20 @@ export default function AppointmentScheduleEditor({
                           return (
                             <div
                               key={slot.id}
-                              className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
+                              className={`rounded-xl border px-3 py-2 text-xs ${
+                                isSelected
+                                  ? "border-amber-300 bg-amber-50 text-amber-800 ring-2 ring-amber-300"
+                                  : "border-red-200 bg-red-50 text-red-700"
+                              }`}
                             >
                               <div className="font-bold">
                                 {slot.startTime} - {slot.endTime}
                               </div>
+
                               <div className="mt-1 truncate">
-                                Booked:{" "}
-                                {slot.bookedAppointment?.patient_name ||
-                                  "Patient"}
+                                {isSelected
+                                  ? "Selected time is already booked"
+                                  : "Booked appointment"}
                               </div>
                             </div>
                           );
@@ -1183,13 +1403,14 @@ export default function AppointmentScheduleEditor({
                               isSelected
                                 ? "border-emerald-600 bg-emerald-100 text-emerald-950 ring-2 ring-emerald-500"
                                 : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50"
-                            }`}                            
+                            }`}
                           >
                             <div className="font-bold">
                               {slot.startTime} - {slot.endTime}
                             </div>
+
                             <div className="mt-1">
-                              {isSelected ? "Selected from AI request" : "Available"}
+                              {isSelected ? "Selected" : "Available"}
                             </div>
                           </button>
                         );
@@ -1208,12 +1429,24 @@ export default function AppointmentScheduleEditor({
               </p>
 
               {selectedSlot ? (
-                <div className="mt-2 text-sm font-bold text-slate-900">
-                  {doctorNameById[selectedDoctorId] || "Doctor"}
+                <div
+                  className={`mt-2 text-sm font-bold ${
+                    selectedSlot.isBooked ? "text-amber-700" : "text-slate-900"
+                  }`}
+                >
+                  {selectedSlot.isBooked
+                    ? "Selected time is already booked."
+                    : doctorNameById[selectedDoctorId] || "Doctor"}
                   <br />
                   {selectedSlot.date}
                   <br />
                   {selectedSlot.startTime} - {selectedSlot.endTime}
+
+                  {selectedSlot.isBooked && (
+                    <p className="mt-2 text-xs font-medium text-slate-500">
+                      Choose another available slot.
+                    </p>
+                  )}
                 </div>
               ) : (
                 <p className="mt-2 text-sm text-slate-500">
@@ -1238,7 +1471,7 @@ export default function AppointmentScheduleEditor({
 
           <button
             type="button"
-            disabled={!selectedSlot || isSaving}
+            disabled={!selectedSlot || selectedSlotIsBooked || !selectedPatientId || isSaving}
             onClick={handleSave}
             className="w-full rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
           >

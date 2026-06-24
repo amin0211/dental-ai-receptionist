@@ -21,6 +21,11 @@ const navigationItems = [
     href: "/dashboard/doctors",
   },
   {
+    label: "Patients",
+    href: "/dashboard/patients",
+  },
+  
+  {
     label: "Services",
     href: "/dashboard/services",
   },

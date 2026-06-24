@@ -20,6 +20,7 @@ from openai_usage_tracker import (
 from supabase_service import (
     normalize_phone,
     find_clinic_by_twilio_number,
+    find_patients_by_phone,
     save_call_to_db,
     update_call,
     match_service_from_transcript,
@@ -39,9 +40,12 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 async def extract_appointment_details_with_openai(
     transcript: str,
     doctors: list[dict] | None = None,
+    patient_candidates: list[dict] | None = None,
 ) -> dict:
     if not openai_client:
         return {
+            "patient_id": None,
+            "patient_identity_confirmed": False,
             "patient_name": None,
             "preferred_doctor_name": None,
             "doctor_confirmed": False,
@@ -64,22 +68,72 @@ async def extract_appointment_details_with_openai(
         if name:
             doctor_names.append(name)
 
-    doctor_list_text = ", ".join(doctor_names) if doctor_names else "No doctor list provided."
+    doctor_list_text = (
+        ", ".join(doctor_names) if doctor_names else "No doctor list provided."
+    )
+
+    patient_options = []
+
+    for patient in patient_candidates or []:
+        patient_id = patient.get("id")
+        full_name = patient.get("full_name")
+        phone_primary = patient.get("phone_primary")
+        phone_secondary = patient.get("phone_secondary")
+
+        if patient_id and full_name:
+            patient_options.append(
+                {
+                    "id": patient_id,
+                    "full_name": full_name,
+                    "phone_primary": phone_primary,
+                    "phone_secondary": phone_secondary,
+                }
+            )
+
+    patient_list_text = (
+        json.dumps(patient_options, ensure_ascii=False)
+        if patient_options
+        else "No existing patients were found for the caller phone number."
+    )
 
     schema = {
         "type": "object",
         "properties": {
+            "patient_id": {
+                "type": ["string", "null"],
+                "description": (
+                    "Existing patient UUID only if the caller clearly confirmed "
+                    "or selected one of the provided existing patient candidates. "
+                    "Never invent an id."
+                ),
+            },
+            "patient_identity_confirmed": {
+                "type": "boolean",
+                "description": (
+                    "True only if the caller clearly confirmed the suggested patient "
+                    "or clearly selected one of the listed existing patients."
+                ),
+            },
             "patient_name": {
                 "type": ["string", "null"],
-                "description": "Patient full name only if clearly provided or clearly confirmed.",
+                "description": (
+                    "Patient full name only if clearly provided, clearly confirmed, "
+                    "or available from a confirmed existing patient candidate."
+                ),
             },
             "preferred_doctor_name": {
                 "type": ["string", "null"],
-                "description": "The preferred doctor name if the caller clearly chose one, or 'no preference' if the caller clearly said they have no preference.",
+                "description": (
+                    "The preferred doctor name if the caller clearly chose one, "
+                    "or 'no preference' if the caller clearly said they have no preference."
+                ),
             },
             "doctor_confirmed": {
                 "type": "boolean",
-                "description": "True if the caller clearly selected a doctor or clearly said they have no preference. Explicit yes/no confirmation is not required.",
+                "description": (
+                    "True if the caller clearly selected a doctor or clearly said they have no preference. "
+                    "Explicit yes/no confirmation is not required."
+                ),
             },
             "reason": {
                 "type": ["string", "null"],
@@ -91,23 +145,35 @@ async def extract_appointment_details_with_openai(
             },
             "preferred_time_raw": {
                 "type": ["string", "null"],
-                "description": "Preferred appointment time or selected suggested slot time only if clearly provided or selected.",
+                "description": (
+                    "Preferred appointment time or selected suggested slot time only if clearly provided or selected."
+                ),
             },
             "name_confirmed": {
                 "type": "boolean",
-                "description": "True only if the assistant repeated the name and the caller clearly confirmed it.",
+                "description": (
+                    "True if the patient name was clearly confirmed, or if an existing patient candidate was confirmed."
+                ),
             },
             "date_confirmed": {
                 "type": "boolean",
-                "description": "True only if the assistant repeated the date and the caller clearly confirmed it, or the caller selected a suggested slot with a specific date.",
+                "description": (
+                    "True only if the assistant repeated the date and the caller clearly confirmed it, "
+                    "or the caller selected a suggested slot with a specific date."
+                ),
             },
             "time_confirmed": {
                 "type": "boolean",
-                "description": "True only if the assistant repeated the time and the caller clearly confirmed it, or the caller selected a suggested slot with a specific time.",
+                "description": (
+                    "True only if the assistant repeated the time and the caller clearly confirmed it, "
+                    "or the caller selected a suggested slot with a specific time."
+                ),
             },
             "reason_confirmed": {
                 "type": "boolean",
-                "description": "True if the reason was clearly stated. Explicit yes/no confirmation is not required for reason.",
+                "description": (
+                    "True if the reason was clearly stated. Explicit yes/no confirmation is not required for reason."
+                ),
             },
             "language": {
                 "type": ["string", "null"],
@@ -119,10 +185,14 @@ async def extract_appointment_details_with_openai(
             },
             "notes": {
                 "type": ["string", "null"],
-                "description": "Short explanation of missing, rejected, unclear, selected, or uncertain values.",
+                "description": (
+                    "Short explanation of missing, rejected, unclear, selected, or uncertain values."
+                ),
             },
         },
         "required": [
+            "patient_id",
+            "patient_identity_confirmed",
             "patient_name",
             "preferred_doctor_name",
             "doctor_confirmed",
@@ -149,8 +219,16 @@ async def extract_appointment_details_with_openai(
                     "content": (
                         "Extract structured appointment details from this phone call transcript. "
                         "Use only information supported by the transcript. "
-                        "Do not guess or invent patient names, doctor names, dates, times, or reasons. "
+                        "Do not guess or invent patient names, patient ids, doctor names, dates, times, or reasons. "
                         f"The available doctors for this clinic are: {doctor_list_text}. "
+                        f"Existing patient candidates for the caller phone are: {patient_list_text}. "
+                        "If the transcript shows the caller clearly confirmed one suggested patient, "
+                        "or clearly selected one patient from the provided patient candidates, set patient_id to that exact candidate id "
+                        "and patient_identity_confirmed to true. "
+                        "If the caller rejected the suggested patient, said it is for someone else, or provided a new name that is not one of the candidates, "
+                        "set patient_id to null and patient_identity_confirmed to false, but extract patient_name if clearly provided. "
+                        "If multiple patient candidates were offered and the caller selected one by name, set patient_id to that candidate's id. "
+                        "Never invent a patient_id. Use only ids from the provided candidates. "
                         "If the caller says a doctor name approximately, phonetically, partially, or in another language, "
                         "match it to the closest available doctor from the provided doctor list. "
                         "If the caller clearly says no preference, set preferred_doctor_name to 'no preference'. "
@@ -186,6 +264,8 @@ async def extract_appointment_details_with_openai(
 
     except Exception as e:
         return {
+            "patient_id": None,
+            "patient_identity_confirmed": False,
             "patient_name": None,
             "preferred_doctor_name": None,
             "doctor_confirmed": False,
@@ -222,6 +302,7 @@ async def twilio_realtime(websocket: WebSocket):
     current_clinic_id = None
     current_caller_phone = None
     current_doctors = []
+    current_patient_candidates = []
 
     realtime_session_ready = False
 
@@ -239,7 +320,7 @@ async def twilio_realtime(websocket: WebSocket):
 
             base_realtime_instructions = (
                 "You are a concise, warm, and professional AI receptionist for Westview Dental in Vancouver, BC. "
-                "Start the call naturally by greeting the caller and asking how you can help. "
+                "Start the call naturally by greeting the caller, then follow the IMPORTANT PATIENT CONTEXT exactly. "
                 "Start in neutral English unless the caller clearly speaks another language first. "
                 "Reply in the caller's clearly detected language. "
                 "If the caller clearly speaks Persian/Farsi at any point, switch to Persian/Farsi and continue in Persian/Farsi. "
@@ -250,7 +331,8 @@ async def twilio_realtime(websocket: WebSocket):
                 "Keep replies short, natural, and receptionist-like. "
                 "Normally ask exactly one question at a time. "
                 "Do not ask for more than one new field in the same reply. "
-                "Do not ask for the patient's name. "
+                "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
+                "or when the caller says the request is for someone else, or when the patient identity is not clear. "
                 "Use brief natural acknowledgements only when they help the call feel normal, such as: Sure, I can repeat that. "
                 "Do not overuse filler or long status messages. "
                 "If the caller asks to repeat, rephrase, say that again, or asks what you just said, repeat the last meaningful assistant message or the last offered options. "
@@ -258,7 +340,7 @@ async def twilio_realtime(websocket: WebSocket):
                 "After repeating or rephrasing, ask the same pending question again. "
                 "For appointment booking, do not force the caller to choose a doctor first. "
                 "If the caller already mentions a doctor, remember that doctor preference. "
-                "If the caller does not mention a doctor, ask the reason for the dental visit first. "
+                "If the caller does not mention a doctor, ask the reason for the dental visit after patient identity has been handled. "
                 "For reason, ask only why they want the dental visit. "
                 "If the reason is specific enough to map to a dental service or symptom, accept it. "
                 "If the caller only says a vague reason such as problem, issue, something is wrong, I need a dentist, or I have a concern, ask one follow-up question to clarify the dental problem before calling get_booking_options. "
@@ -317,6 +399,7 @@ async def twilio_realtime(websocket: WebSocket):
                 nonlocal current_caller_phone
                 nonlocal transcript_parts
                 nonlocal current_doctors
+                nonlocal current_patient_candidates
                 nonlocal realtime_session_ready
 
                 try:
@@ -352,6 +435,13 @@ async def twilio_realtime(websocket: WebSocket):
 
                             print(f"Active doctors for clinic: {current_doctors}")
 
+                            current_patient_candidates = find_patients_by_phone(
+                                clinic_id=clinic_id,
+                                phone=caller,
+                            )
+
+                            print(f"Patient candidates for caller phone: {current_patient_candidates}")
+
                             if len(current_doctors) > 1:
                                 doctor_names = [
                                     doctor.get("display_name") or doctor.get("full_name")
@@ -364,7 +454,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     f"This clinic has multiple active doctors: {', '.join(doctor_names)}. "
                                     "Do not force the caller to choose a doctor first. "
                                     "If the caller mentions a doctor at any point, treat it as preferred_doctor_name and use that doctor for booking search. "
-                                    "If the caller does not mention a doctor, ask the reason for the dental visit first. "
+                                    "If the caller does not mention a doctor, ask the reason for the dental visit after patient identity has been handled. "
                                     "After the reason is clear, call the get_booking_options tool. "
                                     "If no doctor was requested, the tool will find eligible doctors for that treatment. "
                                     "If a doctor was requested, the tool will check that doctor and treatment combination. "
@@ -374,14 +464,15 @@ async def twilio_realtime(websocket: WebSocket):
                                     "If the caller rejects the suggested slots without a new doctor or date, ask what date they prefer. "
                                     "If the caller still does not choose a slot, say the front desk will contact them to find another time. "
                                     "Ask only one direct question at a time. "
-                                    "Do not ask for the patient's name. "
+                                    "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
+                                    "or when the caller says the request is for someone else, or when the patient identity is not clear. "
                                 )
                             else:
                                 doctor_context = (
                                     " IMPORTANT CLINIC CONTEXT: "
                                     "This clinic has zero or one active doctor. "
                                     "Do not ask which doctor the caller prefers. "
-                                    "Ask the reason for the dental visit first. "
+                                    "Ask the reason for the dental visit after patient identity has been handled. "
                                     "After the reason is clear, call the get_booking_options tool to suggest appointment slots. "
                                     "If the caller gives a preferred date, confirm the date before calling the tool with that date. "
                                     "After slot suggestions are given, if the caller says a different date, call the tool again with the updated date. "
@@ -389,7 +480,44 @@ async def twilio_realtime(websocket: WebSocket):
                                     "If the caller rejects the suggested slots without a new date, ask what date they prefer. "
                                     "If the caller still does not choose a slot, say the front desk will contact them to find another time. "
                                     "Ask only one direct question at a time. "
-                                    "Do not ask for the patient's name. "
+                                    "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
+                                    "or when the caller says the request is for someone else, or when the patient identity is not clear. "
+                                )
+
+                            if len(current_patient_candidates) == 1:
+                                patient = current_patient_candidates[0]
+                                patient_context = (
+                                    " IMPORTANT PATIENT CONTEXT: "
+                                    "The caller phone number matches one existing patient. "
+                                    f"Patient option: id={patient.get('id')}, name={patient.get('full_name')}. "
+                                    f"At the start of the call, after greeting, ask: Are you calling for {patient.get('full_name')}? "
+                                    "If the caller says yes, continue without asking for the name and ask for the reason for the dental visit. "
+                                    "If the caller says no or says it is for someone else, ask for the patient's full name. "
+                                    "Do not say or expose the patient id to the caller. "
+                                )
+
+                            elif len(current_patient_candidates) > 1:
+                                patient_names = [
+                                    patient.get("full_name")
+                                    for patient in current_patient_candidates
+                                    if patient.get("full_name")
+                                ]
+
+                                patient_context = (
+                                    " IMPORTANT PATIENT CONTEXT: "
+                                    "The caller phone number matches multiple existing patients. "
+                                    f"Patient options: {', '.join(patient_names)}. "
+                                    "At the start of the call, after greeting, ask which patient this is for and list the names. "
+                                    "If the caller chooses one of the listed patients, continue without asking for the name and ask for the reason for the dental visit. "
+                                    "If the caller says it is for someone else, ask for the patient's full name. "
+                                    "Do not say or expose any patient id to the caller. "
+                                )
+
+                            else:
+                                patient_context = (
+                                    " IMPORTANT PATIENT CONTEXT: "
+                                    "No existing patient was found for this caller phone number. "
+                                    "At the start of the call, after greeting, ask for the patient's full name. "
                                 )
 
                             session_update = {
@@ -397,7 +525,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 "session": {
                                     "type": "realtime",
                                     "model": OPENAI_REALTIME_MODEL,
-                                    "instructions": base_realtime_instructions + doctor_context,
+                                    "instructions": base_realtime_instructions + doctor_context + patient_context,
                                     "output_modalities": ["audio"],
                                     "audio": {
                                         "input": {
@@ -460,7 +588,7 @@ async def twilio_realtime(websocket: WebSocket):
                             }
 
                             await openai_ws.send(json.dumps(session_update))
-                            print("Sent OpenAI session.update with clinic context and booking tool")
+                            print("Sent OpenAI session.update with clinic, patient context and booking tool")
                             realtime_session_ready = True
 
                             await openai_ws.send(
@@ -470,7 +598,10 @@ async def twilio_realtime(websocket: WebSocket):
                                         "response": {
                                             "instructions": (
                                                 "Greet the caller naturally as Westview Dental's AI receptionist. "
-                                                "Say: Hello, thanks for calling Westview Dental. How can I help you today?"
+                                                "Then follow the IMPORTANT PATIENT CONTEXT exactly. "
+                                                "If one existing patient was found, ask whether the caller is calling for that patient. "
+                                                "If multiple existing patients were found, ask which listed patient this is for. "
+                                                "If no existing patient was found, ask for the patient's full name."
                                             )
                                         },
                                     }
@@ -536,6 +667,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 appointment_details = await extract_appointment_details_with_openai(
                                     full_transcript,
                                     current_doctors,
+                                    current_patient_candidates,
                                 )
 
                                 preferred_doctor_name = appointment_details.get("preferred_doctor_name")
@@ -563,16 +695,12 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 service_match = None
 
-                                # First try to match only the extracted dental reason.
-                                # This prevents generic earlier phrases like "appointment" or "tooth problem"
-                                # from beating the actual treatment like "root canal".
                                 if extracted_reason:
                                     service_match = match_service_from_transcript(
                                         current_clinic_id,
                                         extracted_reason,
                                     )
 
-                                # Fallback: only if extracted reason did not match, search the caller transcript.
                                 if not service_match:
                                     service_match = match_service_from_transcript(
                                         current_clinic_id,
@@ -580,6 +708,32 @@ async def twilio_realtime(websocket: WebSocket):
                                     )
 
                                 patient_name = appointment_details.get("patient_name")
+                                patient_id = appointment_details.get("patient_id")
+                                patient_identity_confirmed = bool(
+                                    appointment_details.get("patient_identity_confirmed")
+                                )
+
+                                valid_patient_ids = {
+                                    patient.get("id")
+                                    for patient in current_patient_candidates
+                                    if patient.get("id")
+                                }
+
+                                if not patient_identity_confirmed or patient_id not in valid_patient_ids:
+                                    patient_id = None
+
+                                if patient_id:
+                                    matched_patient = next(
+                                        (
+                                            patient
+                                            for patient in current_patient_candidates
+                                            if patient.get("id") == patient_id
+                                        ),
+                                        None,
+                                    )
+
+                                    if matched_patient:
+                                        patient_name = matched_patient.get("full_name") or patient_name
 
                                 reason = (
                                     service_match["canonical_reason"]
@@ -616,6 +770,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     raw_transcript=full_transcript,
                                     cleaned_transcript=appointment_details.get("notes"),
                                     detected_language=appointment_details.get("language"),
+                                    patient_id=patient_id,
                                     patient_name=patient_name,
                                     service_category=(
                                         service_match["category_name"]
@@ -640,6 +795,7 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 should_create_request = bool(
                                     patient_name
+                                    or patient_id
                                     or preferred_doctor_name
                                     or reason
                                     or preferred_date_raw
@@ -651,6 +807,7 @@ async def twilio_realtime(websocket: WebSocket):
                                         clinic_id=current_clinic_id,
                                         call_id=current_call_id,
                                         patient_phone=current_caller_phone,
+                                        patient_id=patient_id,
                                         patient_name=patient_name,
                                         reason=reason,
                                         preferred_time=preferred_time_combined,
@@ -662,6 +819,7 @@ async def twilio_realtime(websocket: WebSocket):
 
                                     if appointment_request:
                                         updates = {
+                                            "patient_id": patient_id,
                                             "doctor_id": doctor_id,
                                             "preferred_doctor_name": preferred_doctor_name,
                                             "preferred_date_raw": preferred_date_raw,
@@ -686,7 +844,7 @@ async def twilio_realtime(websocket: WebSocket):
 
                                     print(
                                         "Realtime appointment request created after-call AI extraction: "
-                                        f"service={service_match}, details={appointment_details}"
+                                        f"patient_id={patient_id}, service={service_match}, details={appointment_details}"
                                     )
 
                                 else:
