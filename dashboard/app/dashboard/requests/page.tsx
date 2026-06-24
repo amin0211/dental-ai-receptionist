@@ -9,6 +9,7 @@ import AppointmentScheduleEditor from "@/components/appointments/AppointmentSche
 
 type AppointmentRequest = {
   id: string;
+  patient_id: string | null;
   patient_name: string | null;
   patient_phone: string | null;
   reason: string | null;
@@ -138,6 +139,7 @@ function RequestsPageContent() {
       .select(
         `
         id,
+        patient_id,
         patient_name,
         patient_phone,
         reason,
@@ -256,6 +258,31 @@ function RequestsPageContent() {
       if (error) {
         throw new Error(error.message);
       }
+
+
+      const updatedRequest: AppointmentRequest = {
+        ...selectedRequest,
+        patient_name: patientName.trim() ? patientName.trim() : null,
+        patient_phone: patientPhone.trim() ? patientPhone.trim() : null,
+        reason: reason.trim() ? reason.trim() : null,
+        service_category_name: serviceCategoryName.trim()
+          ? serviceCategoryName.trim()
+          : null,
+        preferred_doctor_name: preferredDoctorName.trim()
+          ? preferredDoctorName.trim()
+          : null,
+        preferred_date_raw: preferredDateRaw.trim()
+          ? preferredDateRaw.trim()
+          : null,
+        preferred_time_raw: preferredTimeRaw.trim()
+          ? preferredTimeRaw.trim()
+          : null,
+        urgency,
+        duration_minutes: durationNumber,
+      };
+
+      setSelectedRequest(updatedRequest);
+
 
       setSuccessMessage("Request updated successfully.");
       await loadRequests();
