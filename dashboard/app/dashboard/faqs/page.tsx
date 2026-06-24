@@ -226,7 +226,7 @@ export default function ClinicFaqsPage() {
 
   if (loading) {
     return (
-      <DashboardShell>
+      <DashboardShell title="Clinic FAQs">
         <div className="p-6">
           <p className="text-sm text-slate-500">Loading FAQs...</p>
         </div>
@@ -236,7 +236,7 @@ export default function ClinicFaqsPage() {
 
   if (!clinicId) {
     return (
-      <DashboardShell>
+      <DashboardShell title="Clinic FAQs">
         <div className="p-6">
           <h1 className="text-xl font-semibold text-slate-900">
             Clinic FAQs
@@ -250,7 +250,7 @@ export default function ClinicFaqsPage() {
   }
 
   return (
-    <DashboardShell>
+    <DashboardShell title="Clinic FAQs">
       <div className="space-y-6 p-6">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
