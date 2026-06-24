@@ -518,129 +518,116 @@ async function handleChangeStatus(nextStatus: string) {
             </div>
 
             <form onSubmit={handleSaveChanges} className="space-y-5 p-5">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label className="text-sm font-medium text-slate-700">
-                    Patient Name
-                  </label>
-                  <input
-                    value={patientName}
-                    onChange={(event) => setPatientName(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-slate-700">
-                    Patient Phone
-                  </label>
-                  <input
-                    value={patientPhone}
-                    onChange={(event) => setPatientPhone(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Patient Name
+                </label>
+                <input
+                  value={patientName}
+                  onChange={(event) => setPatientName(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
               </div>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label className="text-sm font-medium text-slate-700">
-                    Reason
-                  </label>
-                  <input
-                    value={reason}
-                    onChange={(event) => setReason(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-slate-700">
-                    Service
-                  </label>
-                  <input
-                    value={serviceCategoryName}
-                    onChange={(event) =>
-                      setServiceCategoryName(event.target.value)
-                    }
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Patient Phone
+                </label>
+                <input
+                  value={patientPhone}
+                  onChange={(event) => setPatientPhone(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
               </div>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label className="text-sm font-medium text-slate-700">
-                    Preferred Doctor
-                  </label>
-                  <input
-                    value={preferredDoctorName}
-                    onChange={(event) =>
-                      setPreferredDoctorName(event.target.value)
-                    }
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-slate-700">
-                    Urgency
-                  </label>
-                  <select
-                    value={urgency}
-                    onChange={(event) => setUrgency(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  >
-                    <option value="low">Low</option>
-                    <option value="normal">Normal</option>
-                    <option value="urgent">Urgent</option>
-                    <option value="emergency">Emergency</option>
-                  </select>
-                </div>
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Reason
+                </label>
+                <input
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
               </div>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <div>
-                  <label className="text-sm font-medium text-slate-700">
-                    Preferred Date
-                  </label>
-                  <input
-                    value={preferredDateRaw}
-                    onChange={(event) =>
-                      setPreferredDateRaw(event.target.value)
-                    }
-                    placeholder="Example: next Monday"
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-slate-700">
-                    Preferred Time
-                  </label>
-                  <input
-                    value={preferredTimeRaw}
-                    onChange={(event) =>
-                      setPreferredTimeRaw(event.target.value)
-                    }
-                    placeholder="Example: afternoon"
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-slate-700">
-                    Duration Minutes
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={durationMinutes}
-                    onChange={(event) => setDurationMinutes(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  />
-                </div>
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Service
+                </label>
+                <input
+                  value={serviceCategoryName}
+                  onChange={(event) => setServiceCategoryName(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
               </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Preferred Doctor
+                </label>
+                <input
+                  value={preferredDoctorName}
+                  onChange={(event) => setPreferredDoctorName(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Urgency
+                </label>
+                <select
+                  value={urgency}
+                  onChange={(event) => setUrgency(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                >
+                  <option value="low">Low</option>
+                  <option value="normal">Normal</option>
+                  <option value="urgent">Urgent</option>
+                  <option value="emergency">Emergency</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Preferred Date
+                </label>
+                <input
+                  value={preferredDateRaw}
+                  onChange={(event) => setPreferredDateRaw(event.target.value)}
+                  placeholder="Example: next Monday"
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Preferred Time
+                </label>
+                <input
+                  value={preferredTimeRaw}
+                  onChange={(event) => setPreferredTimeRaw(event.target.value)}
+                  placeholder="Example: afternoon"
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-700">
+                  Duration Minutes
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={durationMinutes}
+                  onChange={(event) => setDurationMinutes(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
 
               <button
                 type="submit"

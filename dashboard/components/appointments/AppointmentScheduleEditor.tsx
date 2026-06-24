@@ -1063,7 +1063,7 @@ export default function AppointmentScheduleEditor({
               Appointment Details
             </h3>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-[minmax(340px,1.4fr)_minmax(240px,1fr)_120px]">
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               <div className="relative">
                 <label className="text-sm font-medium text-slate-700">
                   Patient
@@ -1241,7 +1241,7 @@ export default function AppointmentScheduleEditor({
                     setEditableDurationMinutes(event.target.value);
                     setSelectedSlot(null);
                   }}
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 w-full max-w-[220px] rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none focus:border-blue-500"
                 />
               </div>
 
@@ -1284,7 +1284,7 @@ export default function AppointmentScheduleEditor({
                 <input
                   value={editableReason}
                   onChange={(event) => setEditableReason(event.target.value)}
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 w-full max-w-[220px] rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
                 />
               </div>
 
