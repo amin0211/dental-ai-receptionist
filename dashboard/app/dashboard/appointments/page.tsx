@@ -65,6 +65,32 @@ function getTodayDateString() {
   return `${year}-${month}-${day}`;
 }
 
+function addDaysToDateString(dateString: string, days: number) {
+  const date = new Date(`${dateString}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return getTodayDateString();
+  }
+
+  date.setDate(date.getDate() + days);
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function isValidDateString(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const date = new Date(`${value}T00:00:00`);
+
+  return !Number.isNaN(date.getTime());
+}
+
 function getDateRange(dateString: string) {
   const start = new Date(`${dateString}T00:00:00`);
   const end = new Date(start);
@@ -144,7 +170,6 @@ export default function AppointmentsPage() {
     if (isLoadingClinic) return;
 
     setIsLoading(true);
-    setErrorMessage("");
     setSuccessMessage("");
 
     if (!clinicId) {
@@ -152,6 +177,15 @@ export default function AppointmentsPage() {
       setIsLoading(false);
       return;
     }
+
+    if (!isValidDateString(selectedDate)) {
+      setAppointments([]);
+      setErrorMessage("Date must be in YYYY-MM-DD format.");
+      setIsLoading(false);
+      return;
+    }
+
+    setErrorMessage("");
 
     const { startIso, endIso } = getDateRange(selectedDate);
 
@@ -247,7 +281,7 @@ export default function AppointmentsPage() {
 
   async function handleCancelAppointment(appointment: AppointmentRow) {
     const confirmed = window.confirm(
-      "Cancel this appointment? This will remove it from today's confirmed appointments."
+      "Cancel this appointment? This will remove it from confirmed appointments."
     );
 
     if (!confirmed) return;
@@ -318,15 +352,53 @@ export default function AppointmentsPage() {
 
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 p-5">
-          <div className="flex flex-wrap items-end gap-4">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[420px_1fr_1fr_auto] lg:items-end">
             <div>
               <label className="text-sm font-medium text-slate-700">Date</label>
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(event) => setSelectedDate(event.target.value)}
-                className="mt-2 w-full min-w-[180px] rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
-              />
+
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedDate((current) =>
+                      addDaysToDateString(current, -1)
+                    )
+                  }
+                  className="h-[58px] rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Prev
+                </button>
+
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={selectedDate}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setSelectedDate(value);
+
+                    if (!isValidDateString(value)) {
+                      setErrorMessage("Date must be in YYYY-MM-DD format.");
+                    } else {
+                      setErrorMessage("");
+                    }
+                  }}
+                  placeholder="YYYY-MM-DD"
+                  className="h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
+                />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedDate((current) =>
+                      addDaysToDateString(current, 1)
+                    )
+                  }
+                  className="h-[58px] rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Next
+                </button>
+              </div>
             </div>
 
             <div>
@@ -336,7 +408,7 @@ export default function AppointmentsPage() {
               <select
                 value={selectedDoctorId}
                 onChange={(event) => setSelectedDoctorId(event.target.value)}
-                className="mt-2 w-full min-w-[220px] rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
               >
                 <option value="">All doctors</option>
                 {doctors.map((doctor) => (
@@ -354,7 +426,7 @@ export default function AppointmentsPage() {
               <select
                 value={selectedServiceId}
                 onChange={(event) => setSelectedServiceId(event.target.value)}
-                className="mt-2 w-full min-w-[220px] rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
               >
                 <option value="">All services</option>
                 {services.map((service) => (
@@ -371,10 +443,11 @@ export default function AppointmentsPage() {
                 setSelectedDate(getTodayDateString());
                 setSelectedDoctorId("");
                 setSelectedServiceId("");
+                setErrorMessage("");
               }}
-              className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              className="h-[58px] rounded-xl border border-slate-300 px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
-              Reset
+              Today / Reset
             </button>
           </div>
         </div>
