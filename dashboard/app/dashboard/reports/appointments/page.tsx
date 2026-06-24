@@ -779,12 +779,7 @@ export default function AppointmentReportPage() {
                       <th className="w-[85px] px-3 py-3 font-semibold">
                         Urgency
                       </th>
-                      <th className="w-[70px] px-3 py-3 font-semibold">
-                        Min
-                      </th>
-                      <th className="w-[120px] px-3 py-3 font-semibold">
-                        Reason
-                      </th>
+                    
                       <th className="w-[120px] px-3 py-3 font-semibold">
                         Notes
                       </th>
@@ -874,15 +869,7 @@ export default function AppointmentReportPage() {
                           </span>
                         </td>
 
-                        <td className="px-3 py-3 text-slate-600">
-                          {appointment.duration_minutes || 0}
-                        </td>
 
-                        <td className="px-3 py-3 text-slate-600">
-                          <div className="truncate">
-                            {appointment.reason || "-"}
-                          </div>
-                        </td>
 
                         <td className="px-3 py-3 text-slate-600">
                           <div className="truncate">
