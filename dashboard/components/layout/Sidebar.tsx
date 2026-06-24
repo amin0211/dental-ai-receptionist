@@ -41,9 +41,9 @@ const navigationItems = [
     href: "/dashboard/calls",
   },
   {
-  href: "/dashboard/faqs",
-  label: "FAQs",
-  }
+    label: "FAQs",
+    href: "/dashboard/faqs",
+  },
   {
     label: "Settings",
     href: "/dashboard/settings",
