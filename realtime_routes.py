@@ -30,6 +30,9 @@ from supabase_service import (
     get_booking_options_for_ai,
     create_appointment_request,
     update_appointment_request,
+    get_upcoming_appointments_for_ai,
+    cancel_appointment_for_ai,
+    reschedule_appointment_for_ai,
 )
 
 router = APIRouter()
@@ -337,8 +340,44 @@ async def twilio_realtime(websocket: WebSocket):
                 "Use brief natural acknowledgements only when they help the call feel normal, such as: Sure, I can repeat that. "
                 "Do not overuse filler or long status messages. "
                 "If the caller asks to repeat, rephrase, say that again, or asks what you just said, repeat the last meaningful assistant message or the last offered options. "
-                "Do not treat repeat, rephrase, say that again, what did you say, or can you repeat as a date, time, doctor, reason, yes, no, or slot choice. "
+                "Do not treat repeat, rephrase, say that again, what did you say, or can you repeat as a date, time, doctor, reason, yes, no, appointment lookup, cancellation, reschedule, or slot choice. "
                 "After repeating or rephrasing, ask the same pending question again. "
+
+                "If the caller asks about an existing appointment, appointment time, appointment reminder, upcoming appointment, or says phrases like when is my appointment, what time is my appointment, remind me of my appointment, وقت من کیه, ساعت وقتم کیه, do not call get_booking_options. "
+                "First make sure the patient identity is clear and confirmed. "
+                "If one existing patient matches the phone number, ask if the call is for that patient. If yes, use that patient's id. "
+                "If multiple patients match the phone number, ask which patient this is for. After the caller selects one, use that patient's id. "
+                "If no existing patient is found or the patient is not confirmed, ask for the patient's full name and say the front desk can help verify the appointment. "
+                "Only call get_upcoming_appointments when you have a confirmed existing patient_id. "
+                "When appointment lookup returns appointments, tell the caller the earliest upcoming appointment with doctor name, date, and start time only. "
+                "If multiple upcoming appointments are returned and the caller asks generally about their appointment time, tell the earliest one first. "
+                "Do not create a new appointment request when the caller only asks to check or remind an existing appointment. "
+                "If no upcoming appointment is found, say you cannot find an upcoming appointment and the front desk can help. "
+
+                "If the caller asks to cancel an existing appointment, do not call get_booking_options. "
+                "First confirm the patient identity. Then call get_upcoming_appointments for the confirmed patient. "
+                "If exactly one upcoming appointment is available, repeat that appointment with doctor name, date, and start time, then ask for final yes/no confirmation before cancelling. "
+                "If multiple upcoming appointments are available, list them as first, second, third with doctor name, date, and start time, then ask which one they want to cancel. "
+                "After the caller chooses an appointment to cancel, repeat the exact appointment and ask for final yes/no confirmation. "
+                "Only call cancel_appointment after the caller clearly confirms yes to cancelling that exact appointment. "
+                "Never cancel an appointment based on unclear audio, background speech, maybe, or ambiguous yes. "
+                "After cancel_appointment succeeds, tell the caller the appointment has been cancelled. "
+                "If cancel_appointment fails, tell the caller the front desk can help cancel it. "
+
+                "If the caller asks to change, move, modify, or reschedule an existing appointment, do not call get_booking_options first. "
+                "First confirm the patient identity. Then call get_upcoming_appointments for the confirmed patient. "
+                "If exactly one upcoming appointment is available, repeat that appointment with doctor name, date, and start time, then ask what date they prefer instead. "
+                "If multiple upcoming appointments are available, list them as first, second, third with doctor name, date, and start time, then ask which appointment they want to change. "
+                "After the caller chooses which appointment to change, ask what date they prefer instead. "
+                "When the caller gives a new date for rescheduling, repeat only that date and ask if it is correct. "
+                "After the new date is confirmed, call get_booking_options using the original appointment reason or service if available, the original doctor if available, and the confirmed new date. "
+                "Offer exactly two new slot suggestions when available. "
+                "After the caller clearly selects one new slot, call reschedule_appointment with the original appointment id, confirmed patient id, selected slot doctor_id, starts_at, and ends_at. "
+                "Only reschedule after the caller clearly selects one new offered slot. "
+                "Never reschedule based on unclear audio, background speech, maybe, or ambiguous yes. "
+                "After reschedule_appointment succeeds, tell the caller the appointment has been changed to the new time. "
+                "If reschedule_appointment fails, tell the caller the front desk can help reschedule it. "
+
                 "For appointment booking, do not force the caller to choose a doctor first. "
                 "If the caller already mentions a doctor, remember that doctor preference. "
                 "If the caller does not mention a doctor, ask the reason for the dental visit after patient identity has been handled. "
@@ -382,11 +421,11 @@ async def twilio_realtime(websocket: WebSocket):
                 "If the caller says a different date after suggestions, confirm that date first, then call get_booking_options again with the updated date. "
                 "If the caller says both a different doctor and a different date, update both, confirm the date, then call get_booking_options again. "
                 "If the caller rejects the suggested slots without giving a new doctor or date, ask what date they prefer. "
-                "If the caller still does not choose a slot, say the front desk will contact them to find another time. "
+                "If the caller still does not choose a slot after you ask one follow-up question, say the front desk will contact them to find another time. "
                 "If the booking tool says the requested doctor does not provide the treatment, tell the caller that briefly and offer to check another eligible doctor. "
                 "If the booking tool says no slots were found, tell the caller the front desk will contact them to find another time. "
                 "If the booking tool says the service was not matched, ask the caller to briefly repeat the reason for the dental visit. "
-                "If the caller's answer is garbled, mixed-language, unrelated, or low-confidence, do not convert it into a name, date, time, doctor, reason, or slot choice. "
+                "If the caller's answer is garbled, mixed-language, unrelated, or low-confidence, do not convert it into a name, date, time, doctor, reason, appointment id, cancellation, reschedule, or slot choice. "
                 "Ask the same field again in the last clearly established language. "
                 "Never turn unclear audio into a likely date such as next Tuesday, next Monday, April 22, April 15, or a likely time such as 3 PM or 9:30 AM. "
                 "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
@@ -470,7 +509,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     "After slot suggestions are given, if the caller says a different doctor or different date, call the tool again with the updated preference. "
                                     "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
                                     "If the caller rejects the suggested slots without a new doctor or date, ask what date they prefer. "
-                                    "If the caller still does not choose a slot, say the front desk will contact them to find another time. "
+                                    "If the caller still does not choose a slot after you ask one follow-up question, say the front desk will contact them to find another time. "
                                     "Ask only one direct question at a time. "
                                     "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
                                     "or when the caller says the request is for someone else, or when the patient identity is not clear. "
@@ -486,7 +525,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     "After slot suggestions are given, if the caller says a different date, call the tool again with the updated date. "
                                     "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
                                     "If the caller rejects the suggested slots without a new date, ask what date they prefer. "
-                                    "If the caller still does not choose a slot, say the front desk will contact them to find another time. "
+                                    "If the caller still does not choose a slot after you ask one follow-up question, say the front desk will contact them to find another time. "
                                     "Ask only one direct question at a time. "
                                     "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
                                     "or when the caller says the request is for someone else, or when the patient identity is not clear. "
@@ -499,7 +538,11 @@ async def twilio_realtime(websocket: WebSocket):
                                     "The caller phone number matches one existing patient. "
                                     f"Patient option: id={patient.get('id')}, name={patient.get('full_name')}. "
                                     f"At the start of the call, after greeting, ask: Are you calling for {patient.get('full_name')}? "
-                                    "If the caller says yes, continue without asking for the name and ask for the reason for the dental visit. "
+                                    "If the caller says yes, treat this patient as confirmed. "
+                                    "If the caller wants to book a new appointment, continue without asking for the name and ask for the reason for the dental visit. "
+                                    "If the caller asks about an existing appointment, call get_upcoming_appointments with this patient's id. "
+                                    "If the caller asks to cancel an appointment, call get_upcoming_appointments with this patient's id first. "
+                                    "If the caller asks to change or reschedule an appointment, call get_upcoming_appointments with this patient's id first. "
                                     "If the caller says no or says it is for someone else, ask for the patient's full name. "
                                     "Do not say or expose the patient id to the caller. "
                                 )
@@ -511,22 +554,36 @@ async def twilio_realtime(websocket: WebSocket):
                                     if patient.get("full_name")
                                 ]
 
+                                patient_options_for_ai = [
+                                    {
+                                        "id": patient.get("id"),
+                                        "full_name": patient.get("full_name"),
+                                    }
+                                    for patient in current_patient_candidates
+                                    if patient.get("id") and patient.get("full_name")
+                                ]
+
                                 patient_context = (
                                     " IMPORTANT PATIENT CONTEXT: "
                                     "The caller phone number matches multiple existing patients. "
-                                    f"Patient options: {', '.join(patient_names)}. "
+                                    f"Patient options for the caller: {', '.join(patient_names)}. "
+                                    f"Internal patient ids for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
                                     "At the start of the call, after greeting, ask which patient this is for and list the names. "
-                                    "If the caller chooses one of the listed patients, continue without asking for the name and ask for the reason for the dental visit. "
+                                    "If the caller chooses one of the listed patients, treat that patient as confirmed and use that patient's id for tools. "
+                                    "If the caller asks about an existing appointment after choosing a listed patient, call get_upcoming_appointments with that confirmed patient's id. "
+                                    "If the caller asks to cancel an appointment after choosing a listed patient, call get_upcoming_appointments with that confirmed patient's id first. "
+                                    "If the caller asks to change or reschedule an appointment after choosing a listed patient, call get_upcoming_appointments with that confirmed patient's id first. "
                                     "If the caller says it is for someone else, ask for the patient's full name. "
                                     "Do not say or expose any patient id to the caller. "
                                 )
-
                             else:
                                 patient_context = (
                                     " IMPORTANT PATIENT CONTEXT: "
                                     "No existing patient was found for this caller phone number. "
                                     "At the start of the call, after greeting, ask for the patient's full name. "
+                                    "For appointment lookup, cancellation, or reschedule requests, explain that the front desk can help verify the appointment if no existing patient can be confirmed. "
                                 )
+
                             clinic_context = (
                                 " IMPORTANT CLINIC NAME CONTEXT: "
                                 f"The clinic name is {current_clinic_name}. "
@@ -594,14 +651,98 @@ async def twilio_realtime(websocket: WebSocket):
                                                 ],
                                                 "additionalProperties": False,
                                             },
-                                        }
+                                        },
+                                        {
+                                            "type": "function",
+                                            "name": "get_upcoming_appointments",
+                                            "description": (
+                                                "Look up upcoming appointments for a confirmed existing patient. "
+                                                "Use this when the caller asks about appointment time, appointment reminder, "
+                                                "or when the caller wants to cancel or reschedule an existing appointment."
+                                            ),
+                                            "parameters": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "patient_id": {
+                                                        "type": "string",
+                                                        "description": "Confirmed existing patient id.",
+                                                    },
+                                                },
+                                                "required": ["patient_id"],
+                                                "additionalProperties": False,
+                                            },
+                                        },
+                                        {
+                                            "type": "function",
+                                            "name": "cancel_appointment",
+                                            "description": (
+                                                "Cancel one confirmed upcoming appointment after patient identity is confirmed, "
+                                                "the appointment is identified, and the caller gives final clear yes confirmation."
+                                            ),
+                                            "parameters": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "patient_id": {
+                                                        "type": "string",
+                                                        "description": "Confirmed existing patient id.",
+                                                    },
+                                                    "appointment_id": {
+                                                        "type": "string",
+                                                        "description": "The exact appointment id selected from get_upcoming_appointments.",
+                                                    },
+                                                },
+                                                "required": ["patient_id", "appointment_id"],
+                                                "additionalProperties": False,
+                                            },
+                                        },
+                                        {
+                                            "type": "function",
+                                            "name": "reschedule_appointment",
+                                            "description": (
+                                                "Reschedule one confirmed upcoming appointment after patient identity is confirmed, "
+                                                "the original appointment is identified, and the caller clearly selects a new offered slot."
+                                            ),
+                                            "parameters": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "patient_id": {
+                                                        "type": "string",
+                                                        "description": "Confirmed existing patient id.",
+                                                    },
+                                                    "appointment_id": {
+                                                        "type": "string",
+                                                        "description": "The exact original appointment id selected from get_upcoming_appointments.",
+                                                    },
+                                                    "doctor_id": {
+                                                        "type": "string",
+                                                        "description": "Doctor id from the selected new slot returned by get_booking_options.",
+                                                    },
+                                                    "start_time_iso": {
+                                                        "type": "string",
+                                                        "description": "starts_at value from the selected new slot returned by get_booking_options.",
+                                                    },
+                                                    "end_time_iso": {
+                                                        "type": "string",
+                                                        "description": "ends_at value from the selected new slot returned by get_booking_options.",
+                                                    },
+                                                },
+                                                "required": [
+                                                    "patient_id",
+                                                    "appointment_id",
+                                                    "doctor_id",
+                                                    "start_time_iso",
+                                                    "end_time_iso",
+                                                ],
+                                                "additionalProperties": False,
+                                            },
+                                        },
                                     ],
                                     "tool_choice": "auto",
                                 },
                             }
 
                             await openai_ws.send(json.dumps(session_update))
-                            print("Sent OpenAI session.update with clinic, patient context and booking tool")
+                            print("Sent OpenAI session.update with clinic, patient context and tools")
                             realtime_session_ready = True
 
                             if len(current_patient_candidates) == 1:
@@ -623,13 +764,13 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 initial_response_instructions = (
                                     "Say exactly and only this sentence, with no extra words: "
-                                    f"Hello, thanks for calling Westview Dental. Which patient is this for: {names_text}?"
+                                    f"Hello, thanks for calling {current_clinic_name}. Which patient is this for: {names_text}?"
                                 )
 
                             else:
                                 initial_response_instructions = (
                                     "Say exactly and only this sentence, with no extra words: "
-                                    "Hello, thanks for calling Westview Dental. What is the patient's full name?"
+                                    f"Hello, thanks for calling {current_clinic_name}. What is the patient's full name?"
                                 )
 
                             await openai_ws.send(
@@ -828,13 +969,52 @@ async def twilio_realtime(websocket: WebSocket):
                                     preferred_doctor_name=preferred_doctor_name,
                                 )
 
-                                should_create_request = bool(
-                                    patient_name
-                                    or patient_id
-                                    or preferred_doctor_name
-                                    or reason
-                                    or preferred_date_raw
-                                    or preferred_time_raw
+                                non_booking_management_phrases = [
+                                    "when is my appointment",
+                                    "what time is my appointment",
+                                    "remind me of my appointment",
+                                    "appointment time",
+                                    "upcoming appointment",
+                                    "cancel my appointment",
+                                    "cancel appointment",
+                                    "cancel the appointment",
+                                    "reschedule my appointment",
+                                    "reschedule appointment",
+                                    "change my appointment",
+                                    "move my appointment",
+                                    "modify my appointment",
+                                    "وقت من کیه",
+                                    "ساعت وقتم",
+                                    "وقت دندان",
+                                    "زمان وقتم",
+                                    "وقتمو کنسل",
+                                    "وقتم رو کنسل",
+                                    "کنسل کنم",
+                                    "کنسل کردن وقت",
+                                    "وقتمو عوض",
+                                    "وقتم رو عوض",
+                                    "تغییر وقت",
+                                    "عوض کردن وقت",
+                                    "جابجا کردن وقت",
+                                ]
+
+                                transcript_lower = full_transcript.lower()
+
+                                is_non_booking_management_call = any(
+                                    phrase.lower() in transcript_lower
+                                    for phrase in non_booking_management_phrases
+                                )
+
+                                should_create_request = (
+                                    not is_non_booking_management_call
+                                    and bool(
+                                        patient_name
+                                        or patient_id
+                                        or preferred_doctor_name
+                                        or reason
+                                        or preferred_date_raw
+                                        or preferred_time_raw
+                                    )
                                 )
 
                                 if should_create_request:
@@ -885,6 +1065,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 else:
                                     print(
                                         "No appointment request created after-call AI extraction. "
+                                        f"is_non_booking_management_call={is_non_booking_management_call}, "
                                         f"service_match={service_match}, details={appointment_details}"
                                     )
 
@@ -996,7 +1177,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     ),
                                 )
 
-                                print(f"Realtime tool result: {tool_result}")
+                                print(f"Realtime booking tool result: {tool_result}")
 
                                 await openai_ws.send(
                                     json.dumps(
@@ -1017,6 +1198,116 @@ async def twilio_realtime(websocket: WebSocket):
                                 await openai_ws.send(
                                     json.dumps({"type": "response.create"})
                                 )
+
+                            elif tool_name == "get_upcoming_appointments":
+                                try:
+                                    args = json.loads(arguments_raw)
+                                except Exception as e:
+                                    print(f"Failed to parse appointment lookup arguments: {e}")
+                                    args = {}
+
+                                tool_result = get_upcoming_appointments_for_ai(
+                                    clinic_id=current_clinic_id,
+                                    patient_id=args.get("patient_id"),
+                                )
+
+                                print(f"Realtime appointment lookup result: {tool_result}")
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "function_call_output",
+                                                "call_id": tool_call_id,
+                                                "output": json.dumps(
+                                                    tool_result,
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        }
+                                    )
+                                )
+
+                                await openai_ws.send(
+                                    json.dumps({"type": "response.create"})
+                                )
+
+                            elif tool_name == "cancel_appointment":
+                                try:
+                                    args = json.loads(arguments_raw)
+                                except Exception as e:
+                                    print(f"Failed to parse cancel appointment arguments: {e}")
+                                    args = {}
+
+                                tool_result = cancel_appointment_for_ai(
+                                    clinic_id=current_clinic_id,
+                                    patient_id=args.get("patient_id"),
+                                    appointment_id=args.get("appointment_id"),
+                                )
+
+                                print(f"Realtime cancel appointment result: {tool_result}")
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "function_call_output",
+                                                "call_id": tool_call_id,
+                                                "output": json.dumps(
+                                                    tool_result,
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        }
+                                    )
+                                )
+
+                                await openai_ws.send(
+                                    json.dumps({"type": "response.create"})
+                                )
+
+                            elif tool_name == "reschedule_appointment":
+                                try:
+                                    args = json.loads(arguments_raw)
+                                except Exception as e:
+                                    print(f"Failed to parse reschedule appointment arguments: {e}")
+                                    args = {}
+
+                                tool_result = reschedule_appointment_for_ai(
+                                    clinic_id=current_clinic_id,
+                                    patient_id=args.get("patient_id"),
+                                    appointment_id=args.get("appointment_id"),
+                                    doctor_id=args.get("doctor_id"),
+                                    start_time_iso=args.get("start_time_iso"),
+                                    end_time_iso=args.get("end_time_iso"),
+                                )
+
+                                print(f"Realtime reschedule appointment result: {tool_result}")
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "function_call_output",
+                                                "call_id": tool_call_id,
+                                                "output": json.dumps(
+                                                    tool_result,
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        }
+                                    )
+                                )
+
+                                await openai_ws.send(
+                                    json.dumps({"type": "response.create"})
+                                )
+
+                            else:
+                                print(f"Unknown realtime tool requested: {tool_name}")
 
                         elif event_type == "response.done":
                             track_realtime_response_done(openai_usage_totals, response)

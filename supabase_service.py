@@ -1244,7 +1244,411 @@ def attach_doctor_name_to_slots(
 
     return enriched_slots
 
+def get_upcoming_appointments_for_ai(
+    clinic_id: str | None,
+    patient_id: str | None,
+    timezone_name: str = "America/Vancouver",
+) -> dict:
+    if not supabase:
+        return {
+            "ok": False,
+            "reason": "supabase_not_initialized",
+            "message_for_ai": "Tell the caller the front desk can help verify the appointment.",
+            "appointments": [],
+        }
 
+    if not clinic_id:
+        return {
+            "ok": False,
+            "reason": "missing_clinic_id",
+            "message_for_ai": "Tell the caller the front desk can help verify the appointment.",
+            "appointments": [],
+        }
+
+    if not patient_id:
+        return {
+            "ok": False,
+            "reason": "missing_patient_id",
+            "message_for_ai": "Ask which patient this is for before checking appointments.",
+            "appointments": [],
+        }
+
+    try:
+        tz = ZoneInfo(timezone_name)
+        now_iso = datetime.now(tz).isoformat()
+
+        result = (
+            supabase.table("appointments")
+            .select(
+                """
+                id,
+                clinic_id,
+                patient_id,
+                doctor_id,
+                service_category_id,
+                service_name,
+                reason,
+                urgency,
+                start_time,
+                end_time,
+                duration_minutes,
+                status,
+                notes
+                """
+            )
+            .eq("clinic_id", clinic_id)
+            .eq("patient_id", patient_id)
+            .gte("start_time", now_iso)
+            .neq("status", "cancelled")
+            .order("start_time")
+            .limit(3)
+            .execute()
+        )
+
+        appointments = result.data or []
+
+        if not appointments:
+            return {
+                "ok": True,
+                "status": "not_found",
+                "message_for_ai": "Tell the caller you could not find an upcoming appointment and the front desk can help.",
+                "appointments": [],
+            }
+
+        doctor_ids = [
+            appointment.get("doctor_id")
+            for appointment in appointments
+            if appointment.get("doctor_id")
+        ]
+
+        doctors_by_id = {}
+
+        if doctor_ids:
+            doctor_result = (
+                supabase.table("clinic_doctors")
+                .select("id, full_name, display_name")
+                .eq("clinic_id", clinic_id)
+                .in_("id", doctor_ids)
+                .execute()
+            )
+
+            for doctor in doctor_result.data or []:
+                doctors_by_id[doctor.get("id")] = (
+                    doctor.get("display_name")
+                    or doctor.get("full_name")
+                    or "the doctor"
+                )
+
+        formatted_appointments = []
+
+        for appointment in appointments:
+            start_raw = appointment.get("start_time")
+            end_raw = appointment.get("end_time")
+
+            try:
+                start_dt = datetime.fromisoformat(
+                    str(start_raw).replace("Z", "+00:00")
+                ).astimezone(tz)
+            except Exception:
+                start_dt = None
+
+            try:
+                end_dt = datetime.fromisoformat(
+                    str(end_raw).replace("Z", "+00:00")
+                ).astimezone(tz)
+            except Exception:
+                end_dt = None
+
+            doctor_name = doctors_by_id.get(
+                appointment.get("doctor_id"),
+                "the doctor",
+            )
+
+            display = None
+
+            if start_dt:
+                display = f"{doctor_name} on {format_slot_for_ai(start_dt, end_dt or start_dt)}"
+
+            formatted_appointments.append(
+                {
+                    "id": appointment.get("id"),
+                    "doctor_id": appointment.get("doctor_id"),
+                    "doctor_name": doctor_name,
+                    "service_name": appointment.get("service_name"),
+                    "reason": appointment.get("reason"),
+                    "status": appointment.get("status"),
+                    "start_time": appointment.get("start_time"),
+                    "end_time": appointment.get("end_time"),
+                    "display": display,
+                }
+            )
+
+        return {
+            "ok": True,
+            "status": "found",
+            "message_for_ai": (
+                "Tell the caller the earliest upcoming appointment. "
+                "Say the doctor name, date, and start time only."
+            ),
+            "appointments": formatted_appointments,
+        }
+
+    except Exception as e:
+        print(f"Error loading upcoming appointments for AI: {e}")
+
+        return {
+            "ok": False,
+            "reason": "lookup_failed",
+            "message_for_ai": "Tell the caller the front desk can help verify the appointment.",
+            "appointments": [],
+        }
+
+def get_patient_appointment_by_id(
+    clinic_id: str | None,
+    patient_id: str | None,
+    appointment_id: str | None,
+) -> dict | None:
+    if not supabase or not clinic_id or not patient_id or not appointment_id:
+        return None
+
+    try:
+        result = (
+            supabase.table("appointments")
+            .select("*")
+            .eq("clinic_id", clinic_id)
+            .eq("patient_id", patient_id)
+            .eq("id", appointment_id)
+            .limit(1)
+            .execute()
+        )
+
+        if result.data:
+            return result.data[0]
+
+        return None
+
+    except Exception as e:
+        print(f"Error loading patient appointment by id: {e}")
+        return None
+
+
+def cancel_appointment_for_ai(
+    clinic_id: str | None,
+    patient_id: str | None,
+    appointment_id: str | None,
+) -> dict:
+    if not supabase:
+        return {
+            "ok": False,
+            "reason": "supabase_not_initialized",
+            "message_for_ai": "Tell the caller the front desk can help cancel the appointment.",
+        }
+
+    if not clinic_id or not patient_id or not appointment_id:
+        return {
+            "ok": False,
+            "reason": "missing_required_fields",
+            "message_for_ai": "Tell the caller the appointment could not be cancelled automatically and the front desk can help.",
+        }
+
+    appointment = get_patient_appointment_by_id(
+        clinic_id=clinic_id,
+        patient_id=patient_id,
+        appointment_id=appointment_id,
+    )
+
+    if not appointment:
+        return {
+            "ok": False,
+            "reason": "appointment_not_found",
+            "message_for_ai": "Tell the caller you could not find that appointment and the front desk can help.",
+        }
+
+    if appointment.get("status") == "cancelled":
+        return {
+            "ok": True,
+            "status": "already_cancelled",
+            "message_for_ai": "Tell the caller this appointment was already cancelled.",
+            "appointment": appointment,
+        }
+
+    try:
+        result = (
+            supabase.table("appointments")
+            .update(
+                {
+                    "status": "cancelled",
+                    "updated_at": datetime.now(
+                        ZoneInfo("America/Vancouver")
+                    ).isoformat(),
+                }
+            )
+            .eq("clinic_id", clinic_id)
+            .eq("patient_id", patient_id)
+            .eq("id", appointment_id)
+            .execute()
+        )
+
+        updated = result.data[0] if result.data else None
+
+        return {
+            "ok": True,
+            "status": "cancelled",
+            "message_for_ai": "Tell the caller the appointment has been cancelled.",
+            "appointment": updated or appointment,
+        }
+
+    except Exception as e:
+        print(f"Error cancelling appointment for AI: {e}")
+
+        return {
+            "ok": False,
+            "reason": "cancel_failed",
+            "message_for_ai": "Tell the caller the front desk can help cancel the appointment.",
+        }
+
+
+def appointment_slot_has_conflict(
+    clinic_id: str | None,
+    doctor_id: str | None,
+    start_time_iso: str | None,
+    end_time_iso: str | None,
+    ignore_appointment_id: str | None = None,
+) -> bool:
+    if (
+        not supabase
+        or not clinic_id
+        or not doctor_id
+        or not start_time_iso
+        or not end_time_iso
+    ):
+        return True
+
+    try:
+        query = (
+            supabase.table("appointments")
+            .select("id, start_time, end_time, status")
+            .eq("clinic_id", clinic_id)
+            .eq("doctor_id", doctor_id)
+            .neq("status", "cancelled")
+            .lt("start_time", end_time_iso)
+            .gt("end_time", start_time_iso)
+        )
+
+        if ignore_appointment_id:
+            query = query.neq("id", ignore_appointment_id)
+
+        result = query.execute()
+
+        return bool(result.data)
+
+    except Exception as e:
+        print(f"Error checking appointment slot conflict: {e}")
+        return True
+
+
+def reschedule_appointment_for_ai(
+    clinic_id: str | None,
+    patient_id: str | None,
+    appointment_id: str | None,
+    doctor_id: str | None,
+    start_time_iso: str | None,
+    end_time_iso: str | None,
+) -> dict:
+    if not supabase:
+        return {
+            "ok": False,
+            "reason": "supabase_not_initialized",
+            "message_for_ai": "Tell the caller the front desk can help reschedule the appointment.",
+        }
+
+    if (
+        not clinic_id
+        or not patient_id
+        or not appointment_id
+        or not doctor_id
+        or not start_time_iso
+        or not end_time_iso
+    ):
+        return {
+            "ok": False,
+            "reason": "missing_required_fields",
+            "message_for_ai": "Tell the caller the appointment could not be changed automatically and the front desk can help.",
+        }
+
+    appointment = get_patient_appointment_by_id(
+        clinic_id=clinic_id,
+        patient_id=patient_id,
+        appointment_id=appointment_id,
+    )
+
+    if not appointment:
+        return {
+            "ok": False,
+            "reason": "appointment_not_found",
+            "message_for_ai": "Tell the caller you could not find that appointment and the front desk can help.",
+        }
+
+    if appointment.get("status") == "cancelled":
+        return {
+            "ok": False,
+            "reason": "appointment_already_cancelled",
+            "message_for_ai": "Tell the caller this appointment is already cancelled and the front desk can help book a new one.",
+        }
+
+    has_conflict = appointment_slot_has_conflict(
+        clinic_id=clinic_id,
+        doctor_id=doctor_id,
+        start_time_iso=start_time_iso,
+        end_time_iso=end_time_iso,
+        ignore_appointment_id=appointment_id,
+    )
+
+    if has_conflict:
+        return {
+            "ok": False,
+            "reason": "slot_conflict",
+            "message_for_ai": "Tell the caller that time is no longer available and offer to check another time.",
+        }
+
+    try:
+        result = (
+            supabase.table("appointments")
+            .update(
+                {
+                    "doctor_id": doctor_id,
+                    "start_time": start_time_iso,
+                    "end_time": end_time_iso,
+                    "status": "confirmed",
+                    "updated_at": datetime.now(
+                        ZoneInfo("America/Vancouver")
+                    ).isoformat(),
+                }
+            )
+            .eq("clinic_id", clinic_id)
+            .eq("patient_id", patient_id)
+            .eq("id", appointment_id)
+            .execute()
+        )
+
+        updated = result.data[0] if result.data else None
+
+        return {
+            "ok": True,
+            "status": "rescheduled",
+            "message_for_ai": "Tell the caller the appointment has been changed to the new time.",
+            "appointment": updated,
+        }
+
+    except Exception as e:
+        print(f"Error rescheduling appointment for AI: {e}")
+
+        return {
+            "ok": False,
+            "reason": "reschedule_failed",
+            "message_for_ai": "Tell the caller the front desk can help reschedule the appointment.",
+        }
+        
 def get_booking_options_for_ai(
     clinic_id: str | None,
     doctors: list[dict],
@@ -1487,4 +1891,5 @@ def get_booking_options_for_ai(
         "slots": best_slots,
         "message_for_ai": "Offer these appointment options to the caller and ask which one works better.",
     }
+
 
