@@ -19,6 +19,7 @@ import {
 
 type RequestForSchedule = {
   id: string;
+  patient_id?: string | null;
   patient_name: string | null;
   patient_phone: string | null;
   reason: string | null;
