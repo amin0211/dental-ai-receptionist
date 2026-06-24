@@ -41,6 +41,10 @@ const navigationItems = [
     href: "/dashboard/calls",
   },
   {
+  href: "/dashboard/faqs",
+  label: "FAQs",
+  }
+  {
     label: "Settings",
     href: "/dashboard/settings",
   },
@@ -85,3 +89,4 @@ export default function Sidebar() {
     </aside>
   );
 }
+

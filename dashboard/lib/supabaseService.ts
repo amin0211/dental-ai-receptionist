@@ -1589,3 +1589,326 @@ export async function getPatientByPhone({
 
   return data as Patient | null;
 }
+
+export type ClinicFaq = {
+  id: string;
+  clinic_id: string;
+  question: string;
+  answer: string;
+  category: string;
+  keywords: string[];
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateClinicFaqInput = {
+  clinicId: string;
+  question: string;
+  answer: string;
+  category: string;
+  keywords: string[];
+  isActive: boolean;
+  sortOrder: number;
+};
+
+export type UpdateClinicFaqInput = {
+  id: string;
+  clinicId: string;
+  question: string;
+  answer: string;
+  category: string;
+  keywords: string[];
+  isActive: boolean;
+  sortOrder: number;
+};
+
+export async function getClinicFaqs(clinicId: string) {
+  const { data, error } = await supabase
+    .from("clinic_faqs")
+    .select(
+      `
+      id,
+      clinic_id,
+      question,
+      answer,
+      category,
+      keywords,
+      is_active,
+      sort_order,
+      created_at,
+      updated_at
+    `
+    )
+    .eq("clinic_id", clinicId)
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data || []) as ClinicFaq[];
+}
+
+export async function getActiveClinicFaqs(clinicId: string) {
+  const { data, error } = await supabase
+    .from("clinic_faqs")
+    .select(
+      `
+      id,
+      clinic_id,
+      question,
+      answer,
+      category,
+      keywords,
+      is_active,
+      sort_order,
+      created_at,
+      updated_at
+    `
+    )
+    .eq("clinic_id", clinicId)
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data || []) as ClinicFaq[];
+}
+
+export async function getClinicFaqsByCategory({
+  clinicId,
+  category,
+}: {
+  clinicId: string;
+  category: string;
+}) {
+  const { data, error } = await supabase
+    .from("clinic_faqs")
+    .select(
+      `
+      id,
+      clinic_id,
+      question,
+      answer,
+      category,
+      keywords,
+      is_active,
+      sort_order,
+      created_at,
+      updated_at
+    `
+    )
+    .eq("clinic_id", clinicId)
+    .eq("category", category)
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data || []) as ClinicFaq[];
+}
+
+export async function createClinicFaq(input: CreateClinicFaqInput) {
+  const { data, error } = await supabase
+    .from("clinic_faqs")
+    .insert({
+      clinic_id: input.clinicId,
+      question: input.question.trim(),
+      answer: input.answer.trim(),
+      category: input.category.trim() || "general",
+      keywords: input.keywords || [],
+      is_active: input.isActive,
+      sort_order: input.sortOrder,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data?.id) {
+    throw new Error("FAQ was created, but no id was returned.");
+  }
+
+  return data.id as string;
+}
+
+export async function updateClinicFaq(input: UpdateClinicFaqInput) {
+  const { error } = await supabase
+    .from("clinic_faqs")
+    .update({
+      question: input.question.trim(),
+      answer: input.answer.trim(),
+      category: input.category.trim() || "general",
+      keywords: input.keywords || [],
+      is_active: input.isActive,
+      sort_order: input.sortOrder,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.id)
+    .eq("clinic_id", input.clinicId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function deleteClinicFaq({
+  id,
+  clinicId,
+}: {
+  id: string;
+  clinicId: string;
+}) {
+  const { error } = await supabase
+    .from("clinic_faqs")
+    .delete()
+    .eq("id", id)
+    .eq("clinic_id", clinicId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function setClinicFaqActive({
+  id,
+  clinicId,
+  isActive,
+}: {
+  id: string;
+  clinicId: string;
+  isActive: boolean;
+}) {
+  const { error } = await supabase
+    .from("clinic_faqs")
+    .update({
+      is_active: isActive,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .eq("clinic_id", clinicId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+function cleanFaqSearchQuery(query: string) {
+  return query.trim().replace(/[%_]/g, "");
+}
+
+export async function searchClinicFaqs({
+  clinicId,
+  query,
+}: {
+  clinicId: string;
+  query: string;
+}) {
+  const cleanQuery = cleanFaqSearchQuery(query);
+
+  if (!cleanQuery) {
+    return getActiveClinicFaqs(clinicId);
+  }
+
+  const { data, error } = await supabase
+    .from("clinic_faqs")
+    .select(
+      `
+      id,
+      clinic_id,
+      question,
+      answer,
+      category,
+      keywords,
+      is_active,
+      sort_order,
+      created_at,
+      updated_at
+    `
+    )
+    .eq("clinic_id", clinicId)
+    .eq("is_active", true)
+    .or(
+      [
+        `question.ilike.%${cleanQuery}%`,
+        `answer.ilike.%${cleanQuery}%`,
+        `category.ilike.%${cleanQuery}%`,
+      ].join(",")
+    )
+    .order("sort_order", { ascending: true })
+    .limit(20);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data || []) as ClinicFaq[];
+}
+
+export async function findBestClinicFaqAnswer({
+  clinicId,
+  question,
+}: {
+  clinicId: string;
+  question: string;
+}) {
+  const cleanQuestion = cleanFaqSearchQuery(question).toLowerCase();
+
+  if (!cleanQuestion) {
+    return null;
+  }
+
+  const faqs = await getActiveClinicFaqs(clinicId);
+
+  const exactQuestionMatch = faqs.find(
+    (faq) => faq.question.toLowerCase() === cleanQuestion
+  );
+
+  if (exactQuestionMatch) {
+    return exactQuestionMatch;
+  }
+
+  const keywordMatch = faqs.find((faq) => {
+    if (!Array.isArray(faq.keywords)) return false;
+
+    return faq.keywords.some((keyword) => {
+      const cleanKeyword = keyword.trim().toLowerCase();
+      if (!cleanKeyword) return false;
+
+      return cleanQuestion.includes(cleanKeyword);
+    });
+  });
+
+  if (keywordMatch) {
+    return keywordMatch;
+  }
+
+  const textMatch = faqs.find((faq) => {
+    const searchableText = [
+      faq.question,
+      faq.answer,
+      faq.category,
+      ...(faq.keywords || []),
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return cleanQuestion
+      .split(/\s+/)
+      .filter(Boolean)
+      .some((word) => searchableText.includes(word));
+  });
+
+  return textMatch || null;
+}
