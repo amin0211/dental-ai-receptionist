@@ -9,7 +9,7 @@ const navigationItems = [
     href: "/dashboard",
   },
   {
-    label: "appointments",
+    label: "Appointments",
     href: "/dashboard/appointments",
   },
   {
@@ -24,7 +24,6 @@ const navigationItems = [
     label: "Patients",
     href: "/dashboard/patients",
   },
-  
   {
     label: "Services",
     href: "/dashboard/services",
@@ -32,6 +31,10 @@ const navigationItems = [
   {
     label: "Calendar",
     href: "/dashboard/calendar",
+  },
+  {
+    label: "Reports",
+    href: "/dashboard/reports/appointments",
   },
   {
     label: "Calls",
