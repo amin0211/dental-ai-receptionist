@@ -4,4 +4,3 @@ supabase
 openai
 websockets
 python-multipart
-rapidfuzz
