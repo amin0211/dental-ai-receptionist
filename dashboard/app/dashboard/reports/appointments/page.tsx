@@ -174,6 +174,7 @@ function getUrgencyBadgeClass(urgency: string | null | undefined) {
   return "bg-slate-50 text-slate-700 ring-slate-200";
 }
 
+
 function SummaryCard({
   label,
   value,
@@ -184,11 +185,11 @@ function SummaryCard({
   valueClassName?: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+    <div className="h-[74px] w-[150px] rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
       <p className="truncate text-[10px] font-bold uppercase tracking-wide text-slate-500">
         {label}
       </p>
-      <p className={`mt-1 text-lg font-bold ${valueClassName}`}>{value}</p>
+      <p className={`mt-2 text-lg font-bold ${valueClassName}`}>{value}</p>
     </div>
   );
 }
@@ -504,7 +505,7 @@ export default function AppointmentReportPage() {
           </div>
         )}
 
-        <section className="mb-4 grid grid-cols-6 gap-2">
+        <section className="mb-4 flex flex-wrap gap-2">
           <SummaryCard label="Total" value={summary.total} />
           <SummaryCard
             label="Confirmed"
