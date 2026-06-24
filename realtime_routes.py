@@ -463,6 +463,22 @@ async def twilio_realtime(websocket: WebSocket):
                             print("Sent OpenAI session.update with clinic context and booking tool")
                             realtime_session_ready = True
 
+                            await openai_ws.send(
+                                json.dumps(
+                                    {
+                                        "type": "response.create",
+                                        "response": {
+                                            "instructions": (
+                                                "Greet the caller naturally as Westview Dental's AI receptionist. "
+                                                "Say: Hello, thanks for calling Westview Dental. How can I help you today?"
+                                            )
+                                        },
+                                    }
+                                )
+                            )
+
+                            print("Sent initial OpenAI greeting response.create")
+
                             saved_call = save_call_to_db(
                                 clinic_id=clinic_id,
                                 twilio_call_sid=call_sid,
@@ -543,22 +559,32 @@ async def twilio_realtime(websocket: WebSocket):
                                     f"{appointment_details}"
                                 )
 
-                                service_match_input = caller_only_transcript
+                                extracted_reason = appointment_details.get("reason")
 
-                                if appointment_details.get("reason"):
-                                    service_match_input += "\n" + appointment_details.get("reason")
+                                service_match = None
 
-                                service_match = match_service_from_transcript(
-                                    current_clinic_id,
-                                    service_match_input,
-                                )
+                                # First try to match only the extracted dental reason.
+                                # This prevents generic earlier phrases like "appointment" or "tooth problem"
+                                # from beating the actual treatment like "root canal".
+                                if extracted_reason:
+                                    service_match = match_service_from_transcript(
+                                        current_clinic_id,
+                                        extracted_reason,
+                                    )
+
+                                # Fallback: only if extracted reason did not match, search the caller transcript.
+                                if not service_match:
+                                    service_match = match_service_from_transcript(
+                                        current_clinic_id,
+                                        caller_only_transcript,
+                                    )
 
                                 patient_name = appointment_details.get("patient_name")
 
                                 reason = (
                                     service_match["canonical_reason"]
                                     if service_match
-                                    else appointment_details.get("reason")
+                                    else extracted_reason
                                 )
 
                                 preferred_date_raw = appointment_details.get("preferred_date_raw")

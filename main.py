@@ -10,9 +10,6 @@ from realtime_routes import router as realtime_router
 
 from supabase_service import (
     normalize_phone,
-    find_clinic_by_twilio_number,
-    save_call_to_db,
-    create_appointment_request,
     get_active_doctors_for_clinic,
     get_booking_options_for_ai,
 )
@@ -45,20 +42,6 @@ def xml_escape(value: str | None) -> str:
         .replace('"', "&quot;")
         .replace("'", "&apos;")
     )
-
-
-def twiml_say_and_hangup(message: str, language: str = "en-US") -> Response:
-    safe_message = xml_escape(message)
-
-    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice" language="{language}">
-        {safe_message}
-    </Say>
-    <Hangup />
-</Response>
-"""
-    return Response(content=twiml, media_type="application/xml")
 
 
 def twiml_connect_realtime(
@@ -203,103 +186,3 @@ def debug_booking_options(
             "error": str(e),
             "error_type": type(e).__name__,
         }
-
-
-# ---------------------------------------------------------------------
-# Old simple speech endpoint kept for safety/testing
-# ---------------------------------------------------------------------
-
-def detect_intent_and_urgency(text: str) -> tuple[str, str]:
-    lower_text = text.lower()
-
-    if any(
-        word in lower_text
-        for word in [
-            "pain",
-            "swelling",
-            "bleeding",
-            "emergency",
-            "urgent",
-            "broken tooth",
-            "infection",
-            "abscess",
-        ]
-    ):
-        return "urgent", "urgent"
-
-    if any(
-        word in lower_text
-        for word in ["appointment", "book", "schedule", "cleaning", "checkup", "exam"]
-    ):
-        return "appointment", "normal"
-
-    if any(
-        word in lower_text
-        for word in ["hour", "hours", "open", "location", "address"]
-    ):
-        return "hours_location", "normal"
-
-    return "general", "normal"
-
-
-@app.post("/twilio/speech")
-async def twilio_speech(request: Request):
-    form = await request.form()
-
-    speech_result = form.get("SpeechResult", "")
-    confidence = form.get("Confidence", "")
-    caller = normalize_phone(form.get("From"))
-    to_number = normalize_phone(form.get("To"))
-    call_sid = form.get("CallSid")
-
-    intent, urgency = detect_intent_and_urgency(speech_result)
-
-    clinic = find_clinic_by_twilio_number(to_number)
-    clinic_id = clinic["id"] if clinic else None
-
-    summary = f"Caller said: {speech_result}. Intent: {intent}. Urgency: {urgency}."
-
-    saved_call = save_call_to_db(
-        clinic_id=clinic_id,
-        twilio_call_sid=call_sid,
-        caller_phone=caller,
-        speech_result=speech_result,
-        confidence=confidence,
-        intent=intent,
-        urgency=urgency,
-        summary=summary,
-    )
-
-    call_id = saved_call["id"] if saved_call else None
-
-    if intent == "appointment":
-        appointment_request = create_appointment_request(
-            clinic_id=clinic_id,
-            call_id=call_id,
-            patient_phone=caller,
-            reason=speech_result,
-            urgency=urgency,
-        )
-
-        if appointment_request:
-            return twiml_say_and_hangup(
-                "Thank you. I captured your request and the front desk will contact you to confirm."
-            )
-
-    elif intent == "hours_location":
-        return twiml_say_and_hangup(
-            "Westview Dental is open Monday to Friday from 9 AM to 5 PM. "
-            "The clinic is located in Vancouver, British Columbia."
-        )
-
-    elif intent == "urgent":
-        return twiml_say_and_hangup(
-            "I am sorry you are dealing with that. "
-            "If you are experiencing severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, "
-            "please seek emergency medical care immediately. "
-            "I will mark this as urgent for the clinic team."
-        )
-
-    return twiml_say_and_hangup(
-        "Thank you. I captured your message. I will send this to the front desk for follow up."
-    )

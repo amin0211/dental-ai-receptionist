@@ -293,63 +293,134 @@ def match_service_from_transcript(clinic_id: str | None, transcript: str):
     try:
         keyword_result = (
             supabase.table("service_keywords")
-            .select("id, category_id, keyword, language, match_type")
+            .select(
+                """
+                id,
+                category_id,
+                keyword,
+                language,
+                match_type,
+                service_categories (
+                    id,
+                    name,
+                    canonical_reason,
+                    default_urgency,
+                    creates_appointment_request,
+                    default_duration_minutes,
+                    is_active
+                )
+                """
+            )
             .eq("clinic_id", clinic_id)
             .eq("is_active", True)
             .execute()
         )
 
-        transcript_lower = normalize_search_text(transcript)
+        transcript_normalized = normalize_search_text(transcript)
 
-        best_match = None
-        best_keyword_length = 0
+        if not transcript_normalized:
+            print("No transcript text to match service")
+            return None
+
+        generic_keywords = {
+            "appointment",
+            "book appointment",
+            "schedule appointment",
+            "dental appointment",
+            "tooth problem",
+            "dental problem",
+            "problem",
+            "issue",
+            "concern",
+            "dentist",
+            "dental visit",
+            "visit",
+        }
+
+        generic_canonical_reasons = {
+            "general",
+            "general_appointment",
+            "appointment",
+            "dental_appointment",
+        }
+
+        best_candidate = None
 
         for row in keyword_result.data or []:
             keyword = (row.get("keyword") or "").strip()
             category_id = row.get("category_id")
+            category = row.get("service_categories") or {}
 
             if not keyword or not category_id:
                 continue
 
-            keyword_lower = normalize_search_text(keyword)
+            if category.get("is_active") is False:
+                continue
+
+            keyword_normalized = normalize_search_text(keyword)
             match_type = row.get("match_type") or "contains"
+
+            if not keyword_normalized:
+                continue
 
             matched = False
 
             if match_type == "contains":
-                matched = keyword_lower in transcript_lower
+                matched = keyword_normalized in transcript_normalized
+
             elif match_type == "exact":
-                matched = keyword_lower == transcript_lower
+                matched = keyword_normalized == transcript_normalized
 
-            # Prefer longer/more specific keyword matches
-            if matched and len(keyword_lower) > best_keyword_length:
-                best_match = row
-                best_keyword_length = len(keyword_lower)
+            else:
+                matched = keyword_normalized in transcript_normalized
 
-        if not best_match:
+            if not matched:
+                continue
+
+            canonical_reason = normalize_search_text(category.get("canonical_reason"))
+            category_name = normalize_search_text(category.get("name"))
+
+            # Base score
+            score = 0
+
+            # Exact match is stronger than contains
+            if keyword_normalized == transcript_normalized:
+                score += 1000
+            else:
+                score += 500
+
+            # More specific multi-word treatment keywords should beat generic words
+            score += len(keyword_normalized)
+
+            if len(keyword_normalized.split()) >= 2:
+                score += 100
+
+            # Strong penalty for generic categories/keywords
+            if keyword_normalized in generic_keywords:
+                score -= 300
+
+            if canonical_reason in generic_canonical_reasons:
+                score -= 500
+
+            if "general" in category_name:
+                score -= 500
+
+            candidate = {
+                "score": score,
+                "row": row,
+                "category": category,
+                "keyword_normalized": keyword_normalized,
+            }
+
+            if best_candidate is None or candidate["score"] > best_candidate["score"]:
+                best_candidate = candidate
+
+        if not best_candidate:
             print("No service keyword matched transcript")
             return None
 
-        category_id = best_match.get("category_id")
-
-        category_result = (
-            supabase.table("service_categories")
-            .select(
-                "id, name, canonical_reason, default_urgency, "
-                "creates_appointment_request, default_duration_minutes"
-            )
-            .eq("id", category_id)
-            .eq("clinic_id", clinic_id)
-            .eq("is_active", True)
-            .limit(1)
-            .execute()
-        )
-
-        if not category_result.data:
-            print(f"Matched keyword but no active service category found: {category_id}")
-            return None
-
-        category = category_result.data[0]
+        best_match = best_candidate["row"]
+        category = best_candidate["category"]
 
         matched_service = {
             "keyword": best_match.get("keyword"),
@@ -359,6 +430,7 @@ def match_service_from_transcript(clinic_id: str | None, transcript: str):
             "default_urgency": category.get("default_urgency") or "normal",
             "creates_appointment_request": bool(category.get("creates_appointment_request")),
             "duration_minutes": category.get("default_duration_minutes") or 30,
+            "match_score": best_candidate["score"],
         }
 
         print(f"Matched service from DB: {matched_service}")
@@ -367,7 +439,8 @@ def match_service_from_transcript(clinic_id: str | None, transcript: str):
     except Exception as e:
         print(f"Error matching service from transcript: {e}")
         return None
-  
+
+
 def parse_db_time(value) -> time | None:
     if not value:
         return None
@@ -1308,265 +1381,3 @@ def get_booking_options_for_ai(
         "message_for_ai": "Offer these appointment options to the caller and ask which one works better.",
     }
 
-def create_call_session(
-    clinic_id: str | None,
-    call_id: str | None,
-    twilio_call_sid: str | None,
-    caller_phone: str | None,
-    current_state: str = "collect_reason",
-    pending_question: str | None = "reason",
-    language: str | None = "en",
-):
-    if not supabase:
-        print("Supabase client is not initialized")
-        return None
-
-    try:
-        payload = {
-            "clinic_id": clinic_id,
-            "call_id": call_id,
-            "twilio_call_sid": twilio_call_sid,
-            "caller_phone": normalize_phone(caller_phone),
-            "current_state": current_state,
-            "pending_question": pending_question,
-            "language": language or "en",
-        }
-
-        print(f"Inserting call session payload: {payload}")
-
-        result = supabase.table("call_sessions").insert(payload).execute()
-
-        print(f"Call session insert result: {result.data}")
-
-        if result.data:
-            return result.data[0]
-
-        return None
-
-    except Exception as e:
-        print(f"Error creating call session: {e}")
-        return None
-
-
-def get_call_session_by_twilio_sid(twilio_call_sid: str | None):
-    if not supabase or not twilio_call_sid:
-        print("Cannot get call session: missing supabase or twilio_call_sid")
-        return None
-
-    try:
-        result = (
-            supabase.table("call_sessions")
-            .select("*")
-            .eq("twilio_call_sid", twilio_call_sid)
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-
-        if result.data:
-            return result.data[0]
-
-        return None
-
-    except Exception as e:
-        print(f"Error loading call session: {e}")
-        return None
-
-
-def update_call_session(call_session_id: str, updates: dict):
-    if not supabase:
-        print("Supabase client is not initialized")
-        return None
-
-    if not call_session_id:
-        print("Cannot update call session: missing call_session_id")
-        return None
-
-    try:
-        print(f"Updating call session {call_session_id}: {updates}")
-
-        result = (
-            supabase.table("call_sessions")
-            .update(updates)
-            .eq("id", call_session_id)
-            .execute()
-        )
-
-        print(f"Call session update result: {result.data}")
-
-        if result.data:
-            return result.data[0]
-
-        return None
-
-    except Exception as e:
-        print(f"Error updating call session: {e}")
-        return None
-
-
-def get_next_turn_index(call_session_id: str | None) -> int:
-    if not supabase or not call_session_id:
-        return 1
-
-    try:
-        result = (
-            supabase.table("call_turn_logs")
-            .select("turn_index")
-            .eq("call_session_id", call_session_id)
-            .order("turn_index", desc=True)
-            .limit(1)
-            .execute()
-        )
-
-        if result.data and result.data[0].get("turn_index") is not None:
-            return int(result.data[0]["turn_index"]) + 1
-
-        return 1
-
-    except Exception as e:
-        print(f"Error getting next turn index: {e}")
-        return 1
-
-
-def save_call_turn_log(
-    call_session_id: str | None,
-    call_id: str | None,
-    twilio_call_sid: str | None,
-    role: str,
-    raw_text: str | None = None,
-    cleaned_text: str | None = None,
-    parsed_intent: str | None = None,
-    parsed_entities: dict | None = None,
-    confidence: float | None = None,
-    state_before: str | None = None,
-    state_after: str | None = None,
-    backend_action: str | None = None,
-    backend_response: str | None = None,
-    fallback_triggered: bool = False,
-    fallback_reason: str | None = None,
-    error_message: str | None = None,
-):
-    if not supabase:
-        print("Supabase client is not initialized")
-        return None
-
-    try:
-        turn_index = get_next_turn_index(call_session_id)
-
-        payload = {
-            "call_session_id": call_session_id,
-            "call_id": call_id,
-            "twilio_call_sid": twilio_call_sid,
-            "turn_index": turn_index,
-            "role": role,
-            "raw_text": raw_text,
-            "cleaned_text": cleaned_text,
-            "parsed_intent": parsed_intent,
-            "parsed_entities": parsed_entities or {},
-            "confidence": confidence,
-            "state_before": state_before,
-            "state_after": state_after,
-            "backend_action": backend_action,
-            "backend_response": backend_response,
-            "fallback_triggered": fallback_triggered,
-            "fallback_reason": fallback_reason,
-            "error_message": error_message,
-        }
-
-        print(f"Inserting call turn log payload: {payload}")
-
-        result = supabase.table("call_turn_logs").insert(payload).execute()
-
-        print(f"Call turn log insert result: {result.data}")
-
-        if result.data:
-            return result.data[0]
-
-        return None
-
-    except Exception as e:
-        print(f"Error saving call turn log: {e}")
-        return None
-    
-def get_local_parser_rules(clinic_id: str | None = None, language: str | None = None):
-    if not supabase:
-        print("Supabase client is not initialized")
-        return []
-
-    try:
-        query = (
-            supabase.table("local_parser_rules")
-            .select("*")
-            .eq("is_active", True)
-            .order("priority", desc=False)
-        )
-
-        # Rules:
-        # 1. global rules: clinic_id is null
-        # 2. clinic-specific rules: clinic_id = current clinic
-        if clinic_id:
-            query = query.or_(f"clinic_id.is.null,clinic_id.eq.{clinic_id}")
-        else:
-            query = query.is_("clinic_id", "null")
-
-        if language:
-            query = query.in_("language", [language, "any"])
-
-        result = query.execute()
-
-        return result.data or []
-
-    except Exception as e:
-        print(f"Error loading local parser rules: {e}")
-        return []
-    
-def get_active_service_keywords_for_clinic(clinic_id: str | None):
-    if not supabase:
-        print("Supabase client is not initialized")
-        return []
-
-    if not clinic_id:
-        print("Cannot load service keywords: missing clinic_id")
-        return []
-
-    try:
-        result = (
-            supabase.table("service_keywords")
-            .select(
-                """
-                id,
-                keyword,
-                language,
-                match_type,
-                category_id,
-                service_categories (
-                    id,
-                    name,
-                    canonical_reason,
-                    default_duration_minutes,
-                    default_urgency,
-                    is_active
-                )
-                """
-            )
-            .eq("clinic_id", clinic_id)
-            .eq("is_active", True)
-            .execute()
-        )
-
-        rows = result.data or []
-
-        active_rows = []
-        for row in rows:
-            category = row.get("service_categories") or {}
-
-            if category.get("is_active") is False:
-                continue
-
-            active_rows.append(row)
-
-        return active_rows
-
-    except Exception as e:
-        print(f"Error loading active service keywords: {e}")
-        return []
