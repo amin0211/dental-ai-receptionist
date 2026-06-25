@@ -35,7 +35,23 @@ type EditMode = "only_this_day" | "this_and_future";
 const WEEK_DAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
 function formatDate(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function isValidDateInput(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const date = new Date(`${value}T00:00:00`);
+
+  return !Number.isNaN(date.getTime()) && formatDate(date) === value;
+}
+
+function normalizeDateInput(value: string) {
+  return value.trim();
 }
 
 function getDateLabel(dateString: string) {
@@ -553,8 +569,21 @@ export default function CalendarPage() {
       setErrorMessage("");
       setFormErrorMessage("");
 
-      if (!formStartDate) {
+      const cleanStartDate = normalizeDateInput(formStartDate);
+      const cleanEndDate = normalizeDateInput(formEndDate);
+
+      if (!cleanStartDate) {
         setFormErrorMessage("Start date is required.");
+        return;
+      }
+
+      if (!isValidDateInput(cleanStartDate)) {
+        setFormErrorMessage("Start date must be in YYYY-MM-DD format.");
+        return;
+      }
+
+      if (cleanEndDate && !isValidDateInput(cleanEndDate)) {
+        setFormErrorMessage("Repeat until must be in YYYY-MM-DD format.");
         return;
       }
 
@@ -568,7 +597,7 @@ export default function CalendarPage() {
         return;
       }
 
-      if (formEndDate && formEndDate < formStartDate) {
+      if (cleanEndDate && cleanEndDate < cleanStartDate) {
         setFormErrorMessage(
           "Repeat until must be the same day as start date or after it."
         );
@@ -580,8 +609,8 @@ export default function CalendarPage() {
       await validateDoctorAvailabilityInsideClinic({
         clinicId: currentClinicId,
         doctorId: formDoctorId,
-        startDate: formStartDate,
-        endDate: formEndDate || null,
+        startDate: cleanStartDate,
+        endDate: cleanEndDate || null,
         startTime: formStartTime,
         endTime: formEndTime,
         repeatType: formRepeatType,
@@ -589,7 +618,7 @@ export default function CalendarPage() {
         notes: formNotes.trim() ? formNotes.trim() : null,
       });
 
-      const startDateObject = new Date(`${formStartDate}T00:00:00`);
+      const startDateObject = new Date(`${cleanStartDate}T00:00:00`);
       const dayOfWeek =
         formRepeatType === "weekly" || formRepeatType === "custom"
           ? startDateObject.getDay()
@@ -598,8 +627,8 @@ export default function CalendarPage() {
       await createCalendarAvailabilityRule({
         clinicId: currentClinicId,
         doctorId: formDoctorId,
-        startDate: formStartDate,
-        endDate: formEndDate || null,
+        startDate: cleanStartDate,
+        endDate: cleanEndDate || null,
         dayOfWeek,
         startTime: formStartTime,
         endTime: formEndTime,
@@ -632,8 +661,21 @@ export default function CalendarPage() {
       setErrorMessage("");
       setFormErrorMessage("");
 
-      if (!formStartDate) {
+      const cleanStartDate = normalizeDateInput(formStartDate);
+      const cleanEndDate = normalizeDateInput(formEndDate);
+
+      if (!cleanStartDate) {
         setFormErrorMessage("Start date is required.");
+        return;
+      }
+
+      if (!isValidDateInput(cleanStartDate)) {
+        setFormErrorMessage("Start date must be in YYYY-MM-DD format.");
+        return;
+      }
+
+      if (cleanEndDate && !isValidDateInput(cleanEndDate)) {
+        setFormErrorMessage("Repeat until must be in YYYY-MM-DD format.");
         return;
       }
 
@@ -1169,32 +1211,36 @@ function AvailabilityModal({
               <label className="text-sm font-medium text-slate-700">
                 Start Date
               </label>
-              <input
-                type="date"
-                value={formStartDate}
-                readOnly={mode === "edit"}
-                onChange={(event) => setFormStartDate(event.target.value)}
-                className={`mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 ${
-                  mode === "edit" ? "bg-slate-50 text-slate-500" : ""
-                }`}
-              />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="YYYY-MM-DD"
+                  value={formStartDate}
+                  readOnly={mode === "edit"}
+                  onChange={(event) => setFormStartDate(event.target.value)}
+                  className={`mt-2 h-[52px] w-full rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-blue-500 ${
+                    mode === "edit" ? "bg-slate-50 text-slate-500" : ""
+                  }`}
+                />
             </div>
 
             <div>
               <label className="text-sm font-medium text-slate-700">
                 Repeat Until
               </label>
-              <input
-                type="date"
-                value={formEndDate}
-                readOnly={mode === "edit" && editMode === "only_this_day"}
-                onChange={(event) => setFormEndDate(event.target.value)}
-                className={`mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500 ${
-                  mode === "edit" && editMode === "only_this_day"
-                    ? "bg-slate-50 text-slate-500"
-                    : ""
-                }`}
-              />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="YYYY-MM-DD"
+                  value={formEndDate}
+                  readOnly={mode === "edit" && editMode === "only_this_day"}
+                  onChange={(event) => setFormEndDate(event.target.value)}
+                  className={`mt-2 h-[52px] w-full rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-blue-500 ${
+                    mode === "edit" && editMode === "only_this_day"
+                      ? "bg-slate-50 text-slate-500"
+                      : ""
+                  }`}
+                />
             </div>
           </div>
 
@@ -1234,11 +1280,10 @@ function AvailabilityModal({
                   value={formRepeatType}
                   onChange={(event) =>
                     setFormRepeatType(
-                      event.target
-                        .value as CalendarAvailabilityRule["repeat_type"]
+                      event.target.value as CalendarAvailabilityRule["repeat_type"]
                     )
                   }
-                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  className="mt-2 h-[52px] w-full appearance-none rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-blue-500"
                 >
                   <option value="none">Does not repeat</option>
                   <option value="daily">Daily</option>
@@ -1252,11 +1297,11 @@ function AvailabilityModal({
                 <label className="text-sm font-medium text-slate-700">
                   Timezone
                 </label>
-                <input
-                  value={formTimezone}
-                  onChange={(event) => setFormTimezone(event.target.value)}
-                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                />
+                  <input
+                    value={formTimezone}
+                    onChange={(event) => setFormTimezone(event.target.value)}
+                    className="mt-2 h-[52px] w-full rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-blue-500"
+                  />
               </div>
             </div>
           )}
