@@ -1790,6 +1790,209 @@ def reschedule_appointment_for_ai(
             "message_for_ai": "Tell the caller the front desk can help reschedule the appointment.",
         }
 
+def normalize_persian_digits(text: str) -> str:
+    persian_digits = "۰۱۲۳۴۵۶۷۸۹"
+    arabic_digits = "٠١٢٣٤٥٦٧٨٩"
+    english_digits = "0123456789"
+
+    for persian, english in zip(persian_digits, english_digits):
+        text = text.replace(persian, english)
+
+    for arabic, english in zip(arabic_digits, english_digits):
+        text = text.replace(arabic, english)
+
+    return text
+
+
+def extract_hour_from_time_text(text: str) -> int | None:
+    text = normalize_persian_digits(text.lower().strip())
+
+    hour_map = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+    }
+
+    for word, hour in hour_map.items():
+        if word in text:
+            if "pm" in text or "p.m" in text:
+                if hour != 12:
+                    hour += 12
+            elif "am" in text or "a.m" in text:
+                if hour == 12:
+                    hour = 0
+            elif any(marker in text for marker in ["عصر", "بعدازظهر", "بعد از ظهر", "شب"]):
+                if hour != 12:
+                    hour += 12
+
+            return hour
+
+    import re
+
+    match = re.search(r"\b(\d{1,2})(?::\d{2})?\s*(am|pm|a\.m\.|p\.m\.)?\b", text)
+
+    if not match:
+        return None
+
+    hour = int(match.group(1))
+    suffix = match.group(2)
+
+    if suffix:
+        suffix = suffix.replace(".", "")
+
+        if suffix == "pm" and hour != 12:
+            hour += 12
+
+        elif suffix == "am" and hour == 12:
+            hour = 0
+
+    elif any(marker in text for marker in ["عصر", "بعدازظهر", "بعد از ظهر", "شب"]):
+        if hour != 12:
+            hour += 12
+
+    return hour
+
+
+def extract_time_range_from_text(text: str) -> tuple[int, int] | None:
+    text = normalize_persian_digits(text.lower().strip())
+
+    import re
+
+    range_patterns = [
+        r"between\s+(.+?)\s+and\s+(.+)",
+        r"from\s+(.+?)\s+to\s+(.+)",
+        r"بین\s+(.+?)\s+تا\s+(.+)",
+        r"از\s+(.+?)\s+تا\s+(.+)",
+    ]
+
+    for pattern in range_patterns:
+        match = re.search(pattern, text)
+
+        if not match:
+            continue
+
+        start_text = match.group(1).strip()
+        end_text = match.group(2).strip()
+
+        whole_text_has_pm_marker = any(
+            marker in text
+            for marker in ["pm", "p.m", "عصر", "بعدازظهر", "بعد از ظهر", "شب"]
+        )
+
+        if whole_text_has_pm_marker:
+            start_has_pm_marker = any(
+                marker in start_text
+                for marker in ["pm", "p.m", "عصر", "بعدازظهر", "بعد از ظهر", "شب"]
+            )
+
+            end_has_pm_marker = any(
+                marker in end_text
+                for marker in ["pm", "p.m", "عصر", "بعدازظهر", "بعد از ظهر", "شب"]
+            )
+
+            if not start_has_pm_marker:
+                start_text = start_text + " pm"
+
+            if not end_has_pm_marker:
+                end_text = end_text + " pm"
+
+        start_hour = extract_hour_from_time_text(start_text)
+        end_hour = extract_hour_from_time_text(end_text)
+
+        if start_hour is None or end_hour is None:
+            return None
+
+        start_minutes = start_hour * 60
+        end_minutes = end_hour * 60
+
+        if end_minutes <= start_minutes:
+            return None
+
+        return start_minutes, end_minutes
+
+    return None
+
+
+def slot_matches_time_preference(
+    slot: dict,
+    preferred_time_raw: str | None,
+    timezone_name: str = "America/Vancouver",
+) -> bool:
+    if not preferred_time_raw:
+        return True
+
+    text = normalize_persian_digits(preferred_time_raw.strip().lower())
+
+    starts_at = slot.get("starts_at")
+    if not starts_at:
+        return True
+
+    try:
+        start_dt = datetime.fromisoformat(str(starts_at).replace("Z", "+00:00"))
+        local_start = start_dt.astimezone(ZoneInfo(timezone_name))
+        hour = local_start.hour
+        minute = local_start.minute
+        minutes = hour * 60 + minute
+    except Exception:
+        return True
+
+    time_range = extract_time_range_from_text(text)
+
+    if time_range:
+        start_minutes, end_minutes = time_range
+        return start_minutes <= minutes < end_minutes
+
+    if "morning" in text or "صبح" in text:
+        return 8 * 60 <= minutes < 12 * 60
+
+    if "afternoon" in text or "بعدازظهر" in text or "بعد از ظهر" in text:
+        return 12 * 60 <= minutes < 17 * 60
+
+    if "evening" in text or "عصر" in text:
+        return 17 * 60 <= minutes < 20 * 60
+
+    if "before noon" in text or "before 12" in text or "قبل از ظهر" in text:
+        return minutes < 12 * 60
+
+    if "after noon" in text or "بعد از ظهر" in text:
+        return minutes >= 12 * 60
+
+    if "after" in text:
+        parsed_hour = extract_hour_from_time_text(text)
+        if parsed_hour is not None:
+            return minutes >= parsed_hour * 60
+
+    if "بعد از" in text or ("از" in text and "به بعد" in text):
+        parsed_hour = extract_hour_from_time_text(text)
+        if parsed_hour is not None:
+            return minutes >= parsed_hour * 60
+
+    if "before" in text:
+        parsed_hour = extract_hour_from_time_text(text)
+        if parsed_hour is not None:
+            return minutes < parsed_hour * 60
+
+    if "قبل از" in text or "تا قبل" in text:
+        parsed_hour = extract_hour_from_time_text(text)
+        if parsed_hour is not None:
+            return minutes < parsed_hour * 60
+
+    parsed_hour = extract_hour_from_time_text(text)
+
+    if parsed_hour is not None:
+        return hour == parsed_hour
+
+    return True
+
 def collapse_slots_by_time(slots: list[dict]) -> list[dict]:
     seen_start_times = set()
     collapsed_slots = []
@@ -1807,13 +2010,13 @@ def collapse_slots_by_time(slots: list[dict]) -> list[dict]:
         collapsed_slots.append(slot)
 
     return collapsed_slots
-
 def get_booking_options_for_ai(
     clinic_id: str | None,
     doctors: list[dict],
     doctor_name: str | None,
     reason: str | None,
     preferred_date_raw: str | None = None,
+    preferred_time_raw: str | None = None,
     preferred_date_confirmed: bool = False,
     timezone_name: str = "America/Vancouver",
 ) -> dict:
@@ -2013,6 +2216,41 @@ def get_booking_options_for_ai(
 
     all_slots = collapse_slots_by_time(all_slots)
 
+    if preferred_time_raw:
+        time_filtered_slots = [
+            slot
+            for slot in all_slots
+            if slot_matches_time_preference(
+                slot=slot,
+                preferred_time_raw=preferred_time_raw,
+                timezone_name=timezone_name,
+            )
+        ]
+
+        if time_filtered_slots:
+            all_slots = time_filtered_slots
+        else:
+            return {
+                "ok": False,
+                "reason": "no_slots_for_time_preference",
+                "service": {
+                    "service_category_id": service_category_id,
+                    "service_name": service_match.get("category_name"),
+                    "canonical_reason": service_match.get("canonical_reason"),
+                    "duration_minutes": duration_minutes,
+                    "default_urgency": service_match.get("default_urgency"),
+                },
+                "doctor_filter": doctor_filter,
+                "preferred_date_raw": preferred_date_raw,
+                "preferred_time_raw": preferred_time_raw,
+                "preferred_date_confirmed": preferred_date_confirmed,
+                "message_for_ai": (
+                    "Tell the caller there are no available times for that time preference, "
+                    "and ask if another time of day works."
+                ),
+                "slots": [],
+            }
+
     best_slots = all_slots[:2]
 
     if not best_slots:
@@ -2048,6 +2286,7 @@ def get_booking_options_for_ai(
             else None
         ),
         "preferred_date_raw": preferred_date_raw,
+        "preferred_time_raw": preferred_time_raw,
         "preferred_date_confirmed": preferred_date_confirmed,
         "slots": best_slots,
         "message_for_ai": "Offer these appointment options to the caller and ask which one works better.",

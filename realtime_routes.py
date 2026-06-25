@@ -325,7 +325,6 @@ async def twilio_realtime(websocket: WebSocket):
             },
         ) as openai_ws:
             print("Connected to OpenAI Realtime")
-            SHORT_AUDIO_MAX_OUTPUT_TOKENS = 300          
             short_audio_response_instructions = (
                 "Reply in the caller's current language. "
                 "Be extremely brief. "
@@ -516,7 +515,15 @@ async def twilio_realtime(websocket: WebSocket):
                 "If the caller says no and provides a corrected date, discard the old date, repeat only the corrected date, and ask if it is correct. "
                 "If the caller says no without a clear correction, discard the old date and ask for the preferred date again. "
                 "If no preferred date is given, search for the earliest available slots. "
-                "Do not ask for a preferred time before using the booking tool. "
+
+                "Do not ask for a preferred time before using the booking tool, but if the caller gives a time preference, keep it. "
+                "If the caller says a time preference such as morning, afternoon, evening, after 2 PM, before noon, or a specific time, keep that as preferred_time_raw. "
+                "If the caller gives a time range such as between 2 and 4, from 3 to 5, بین ۲ تا ۴, or از ۳ تا ۵, keep the full range as preferred_time_raw. "
+                "If the caller says both a different date and time preference, confirm both together, for example: 'Tomorrow afternoon, correct?' "
+                "After the caller confirms the date and time preference, call get_booking_options with preferred_date_raw and preferred_time_raw. "
+                "Never ignore morning, afternoon, evening, after, before, between, from-to, or specific time preferences. "
+                "If the caller requested afternoon, do not offer morning slots. "
+
                 "The preferred time should normally come from one of the suggested appointment slots. "
                 "Even if the selected slot contains doctor_name internally, never include doctor_name in the spoken slot suggestion. "
                 "If the caller requested a specific doctor, search only that doctor internally, but still offer only the date and time to the caller. "
@@ -563,7 +570,6 @@ async def twilio_realtime(websocket: WebSocket):
                             "type": "response.create",
                             "response": {
                                 "instructions": short_audio_response_instructions,
-                                "max_output_tokens": SHORT_AUDIO_MAX_OUTPUT_TOKENS,
                             },
                         }
                     )
@@ -792,6 +798,15 @@ async def twilio_realtime(websocket: WebSocket):
                                                         "type": ["string", "null"],
                                                         "description": "Preferred date if the caller gave one.",
                                                     },
+                                                    "preferred_time_raw": {
+                                                        "type": ["string", "null"],
+                                                        "description": (
+                                                            "Preferred time or time range if the caller gave one, such as morning, afternoon, "
+                                                            "evening, after 2 PM, before noon, 3 PM, between 2 and 4, from 3 to 5, "
+                                                            "or Persian phrases like بعد از ساعت ۳, بین ۲ تا ۴, از ۳ تا ۵. "
+                                                            "Use null if no time preference."
+                                                        ),
+                                                    },                                                    
                                                     "preferred_date_confirmed": {
                                                         "type": "boolean",
                                                         "description": "True only after the assistant repeated the date and the caller confirmed it.",
@@ -801,6 +816,7 @@ async def twilio_realtime(websocket: WebSocket):
                                                     "doctor_name",
                                                     "reason",
                                                     "preferred_date_raw",
+                                                    "preferred_time_raw",
                                                     "preferred_date_confirmed",
                                                 ],
                                                 "additionalProperties": False,
@@ -988,7 +1004,6 @@ async def twilio_realtime(websocket: WebSocket):
                                         "type": "response.create",
                                         "response": {
                                             "instructions": initial_response_instructions,
-                                            "max_output_tokens": 200,
                                         },
                                     }
                                 )
@@ -1386,6 +1401,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     doctor_name=args.get("doctor_name"),
                                     reason=args.get("reason"),
                                     preferred_date_raw=args.get("preferred_date_raw"),
+                                    preferred_time_raw=args.get("preferred_time_raw"),
                                     preferred_date_confirmed=bool(
                                         args.get("preferred_date_confirmed")
                                     ),
