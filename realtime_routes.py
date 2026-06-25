@@ -988,7 +988,7 @@ async def twilio_realtime(websocket: WebSocket):
                                         "type": "response.create",
                                         "response": {
                                             "instructions": initial_response_instructions,
-                                            "max_output_tokens": 60,
+                                            "max_output_tokens": 200,
                                         },
                                     }
                                 )
