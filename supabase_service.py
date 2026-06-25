@@ -2973,3 +2973,52 @@ def get_working_hours_for_ai(
             "Keep the answer short. Do not invent hours."
         ),
     }
+
+def get_patient_birth_year(patient: dict | None) -> int | None:
+    if not patient:
+        return None
+
+    raw_date = patient.get("date_of_birth")
+
+    if not raw_date:
+        return None
+
+    try:
+        return int(str(raw_date)[:4])
+    except Exception:
+        return None
+
+
+def get_patient_display_name(patient: dict | None) -> str:
+    if not patient:
+        return "this patient"
+
+    return (
+        patient.get("full_name")
+        or patient.get("patient_name")
+        or "this patient"
+    )
+
+
+def build_patient_options_for_ai(patients: list[dict]) -> list[dict]:
+    options = []
+
+    for patient in patients or []:
+        patient_id = patient.get("id")
+        full_name = get_patient_display_name(patient)
+
+        if not patient_id or not full_name:
+            continue
+
+        options.append(
+            {
+                "id": patient_id,
+                "full_name": full_name,
+                "date_of_birth": patient.get("date_of_birth"),
+                "birth_year": get_patient_birth_year(patient),
+                "phone_primary": patient.get("phone_primary"),
+                "phone_secondary": patient.get("phone_secondary"),
+            }
+        )
+
+    return options

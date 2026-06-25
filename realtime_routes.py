@@ -22,6 +22,9 @@ from supabase_service import (
     normalize_phone,
     find_clinic_by_twilio_number,
     find_patients_by_phone,
+    build_patient_options_for_ai,
+    get_patient_display_name,
+    get_patient_birth_year,
     save_call_to_db,
     update_call,
     match_service_from_transcript,
@@ -78,23 +81,7 @@ async def extract_appointment_details_with_openai(
         ", ".join(doctor_names) if doctor_names else "No doctor list provided."
     )
 
-    patient_options = []
-
-    for patient in patient_candidates or []:
-        patient_id = patient.get("id")
-        full_name = patient.get("full_name")
-        phone_primary = patient.get("phone_primary")
-        phone_secondary = patient.get("phone_secondary")
-
-        if patient_id and full_name:
-            patient_options.append(
-                {
-                    "id": patient_id,
-                    "full_name": full_name,
-                    "phone_primary": phone_primary,
-                    "phone_secondary": phone_secondary,
-                }
-            )
+    patient_options = build_patient_options_for_ai(patient_candidates or [])
 
     patient_list_text = (
         json.dumps(patient_options, ensure_ascii=False)
@@ -228,13 +215,24 @@ async def extract_appointment_details_with_openai(
                         "Do not guess or invent patient names, patient ids, doctor names, dates, times, or reasons. "
                         f"The available doctors for this clinic are: {doctor_list_text}. "
                         f"Existing patient candidates for the caller phone are: {patient_list_text}. "
-                        "If the transcript shows the caller clearly confirmed one suggested patient, "
-                        "or clearly selected one patient from the provided patient candidates, set patient_id to that exact candidate id "
-                        "and patient_identity_confirmed to true. "
+
+                        "PATIENT IDENTITY RULES: "
+                        "Use only the provided existing patient candidates. Never invent a patient_id. "
+                        "If exactly one patient candidate was suggested and the caller clearly said yes, correct, that's me, بله, آره, درسته, or similar, "
+                        "set patient_id to that candidate id and patient_identity_confirmed to true. "
+                        "If exactly two patient candidates exist and the assistant asked whether the call is for the first patient, "
+                        "then a clear yes confirms the first candidate. A clear no means the second candidate should be used and confirmed, "
+                        "unless the caller clearly says it is for someone else. "
+                        "If three or more patient candidates exist, the assistant should ask for birth year. "
+                        "If the caller gives a birth year and exactly one provided candidate has that birth_year or date_of_birth year, "
+                        "set patient_id to that candidate id and patient_identity_confirmed to true. "
+                        "If the birth year matches none or multiple candidates, do not choose a patient_id. "
+                        "If the caller selects a patient by name, handle accent, phonetic, and transliteration variations, "
+                        "for example امین/Ameen/I mean may refer to Amin, and پریسا/Paris/Prisa may refer to Parisa. "
+                        "Only match names against the provided candidates, not the full database. "
                         "If the caller rejected the suggested patient, said it is for someone else, or provided a new name that is not one of the candidates, "
                         "set patient_id to null and patient_identity_confirmed to false, but extract patient_name if clearly provided. "
-                        "If multiple patient candidates were offered and the caller selected one by name, set patient_id to that candidate's id. "
-                        "Never invent a patient_id. Use only ids from the provided candidates. "
+
                         "If the caller says a doctor name approximately, phonetically, partially, or in another language, "
                         "match it to the closest available doctor from the provided doctor list. "
                         "If the caller clearly says no preference, set preferred_doctor_name to 'no preference'. "
@@ -440,7 +438,11 @@ async def twilio_realtime(websocket: WebSocket):
                 "or says phrases like when is my appointment, what time is my appointment, remind me of my appointment, وقت من کیه, ساعت وقتم کیه, do not call get_booking_options. "
                 "First make sure the patient identity is clear and confirmed. "
                 "If one existing patient matches the phone number, ask if the call is for that patient. If yes, use that patient's id. "
-                "If multiple patients match the phone number, ask which patient this is for. After the caller selects one, use that patient's id. "
+                "If multiple patients match the phone number, follow the patient identity flow from IMPORTANT PATIENT CONTEXT. "
+                "For two patients, confirm the first patient; if the caller says no, use the second patient and say that patient's name clearly. "
+                "For three or more patients, ask for the patient's year of birth and match it only against the phone-number patient candidates. "
+                "After the caller selects or confirms one patient, use that patient's id. "
+
                 "If no existing patient is found or the patient is not confirmed, ask for the patient's full name and say the front desk can help verify the appointment. "
                 "Only call get_upcoming_appointments when you have a confirmed existing patient_id. "
                 "When appointment lookup returns appointments, tell the caller the earliest upcoming appointment with doctor name, date, and start time only. "
@@ -680,6 +682,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     f"Patient option: id={patient.get('id')}, name={patient.get('full_name')}. "
                                     f"At the start of the call, after greeting, ask: Are you calling for {patient.get('full_name')}? "
                                     "If the caller says yes, treat this patient as confirmed. "
+                                    "If the caller repeats the patient's name instead of saying yes, and the name sounds like this patient, treat it as confirmation. "
                                     "If the caller wants to book a new appointment, continue without asking for the name and ask for the reason for the dental visit. "
                                     "If the caller asks about an existing appointment, call get_upcoming_appointments with this patient's id. "
                                     "If the caller asks to cancel an appointment, call get_upcoming_appointments with this patient's id first. "
@@ -688,33 +691,56 @@ async def twilio_realtime(websocket: WebSocket):
                                     "Do not say or expose the patient id to the caller. "
                                 )
 
-                            elif len(current_patient_candidates) > 1:
-                                patient_names = [
-                                    patient.get("full_name")
-                                    for patient in current_patient_candidates
-                                    if patient.get("full_name")
-                                ]
+                            elif len(current_patient_candidates) == 2:
+                                first_patient = current_patient_candidates[0]
+                                second_patient = current_patient_candidates[1]
 
-                                patient_options_for_ai = [
-                                    {
-                                        "id": patient.get("id"),
-                                        "full_name": patient.get("full_name"),
-                                    }
-                                    for patient in current_patient_candidates
-                                    if patient.get("id") and patient.get("full_name")
-                                ]
+                                first_name = get_patient_display_name(first_patient)
+                                second_name = get_patient_display_name(second_patient)
+
+                                patient_options_for_ai = build_patient_options_for_ai(
+                                    current_patient_candidates
+                                )
 
                                 patient_context = (
                                     " IMPORTANT PATIENT CONTEXT: "
-                                    "The caller phone number matches multiple existing patients. "
-                                    f"Patient options for the caller: {', '.join(patient_names)}. "
-                                    f"Internal patient ids for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
-                                    "At the start of the call, after greeting, ask which patient this is for and list the names. "
-                                    "If the caller chooses one of the listed patients, treat that patient as confirmed and use that patient's id for tools. "
-                                    "If the caller asks about an existing appointment after choosing a listed patient, call get_upcoming_appointments with that confirmed patient's id. "
-                                    "If the caller asks to cancel an appointment after choosing a listed patient, call get_upcoming_appointments with that confirmed patient's id first. "
-                                    "If the caller asks to change or reschedule an appointment after choosing a listed patient, call get_upcoming_appointments with that confirmed patient's id first. "
+                                    "The caller phone number matches exactly two existing patients. "
+                                    f"First patient option: name={first_name}, id={first_patient.get('id')}. "
+                                    f"Second patient option: name={second_name}, id={second_patient.get('id')}. "
+                                    f"Internal patient candidates for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
+                                    f"At the start of the call, after greeting, ask exactly: Are you calling for {first_name}? "
+                                    f"If the caller clearly says yes, use {first_name}'s patient id and treat identity as confirmed. "
+                                    f"If the caller clearly says no, use {second_name}'s patient id and say clearly that you will use {second_name}'s profile. "
+                                    "Do not ask the caller to say the second patient's name after they already said no to the first patient. "
                                     "If the caller says it is for someone else, ask for the patient's full name. "
+                                    "If the caller asks about an existing appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id. "
+                                    "If the caller asks to cancel an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
+                                    "If the caller asks to change or reschedule an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
+                                    "Do not say or expose any patient id to the caller. "
+                                )
+
+                            elif len(current_patient_candidates) >= 3:
+                                patient_options_for_ai = build_patient_options_for_ai(
+                                    current_patient_candidates
+                                )
+
+                                patient_context = (
+                                    " IMPORTANT PATIENT CONTEXT: "
+                                    "The caller phone number matches three or more existing patients, likely a family phone number. "
+                                    f"Internal patient candidates for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
+                                    "At the start of the call, after greeting, do not read all patient names. "
+                                    "Ask for the patient's year of birth. "
+                                    "Match the birth year only against the provided patient candidates from this phone number. "
+                                    "If exactly one candidate matches the birth year, use that patient's id, treat identity as confirmed, "
+                                    "and say the patient's name clearly. "
+                                    "If no candidate or more than one candidate matches the birth year, ask for the patient's first name or full name. "
+                                    "When matching a spoken name, handle accent, phonetic, and transliteration variations, "
+                                    "for example امین/Ameen/I mean may refer to Amin, and پریسا/Paris/Prisa may refer to Parisa. "
+                                    "Only match against the provided candidates, not the full database. "
+                                    "If the caller says it is for someone else, ask for the patient's full name. "
+                                    "If the caller asks about an existing appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id. "
+                                    "If the caller asks to cancel an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
+                                    "If the caller asks to change or reschedule an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
                                     "Do not say or expose any patient id to the caller. "
                                 )
                             else:
@@ -971,25 +997,29 @@ async def twilio_realtime(websocket: WebSocket):
                             realtime_session_ready = True
 
                             if len(current_patient_candidates) == 1:
-                                patient_name = current_patient_candidates[0].get("full_name") or "this patient"
-
+                                patient_name = get_patient_display_name(
+                                    current_patient_candidates[0]
+                                )
+                                
                                 initial_response_instructions = (
                                     "Say exactly and only this sentence, with no extra words: "
                                     f"Hello, thanks for calling {current_clinic_name}. Are you calling for {patient_name}?"
                                 )
 
-                            elif len(current_patient_candidates) > 1:
-                                patient_names = [
-                                    patient.get("full_name")
-                                    for patient in current_patient_candidates
-                                    if patient.get("full_name")
-                                ]
-
-                                names_text = ", ".join(patient_names)
+                            elif len(current_patient_candidates) == 2:
+                                first_patient_name = get_patient_display_name(
+                                    current_patient_candidates[0]
+                                )
 
                                 initial_response_instructions = (
                                     "Say exactly and only this sentence, with no extra words: "
-                                    f"Hello, thanks for calling {current_clinic_name}. Which patient is this for: {names_text}?"
+                                    f"Hello, thanks for calling {current_clinic_name}. Are you calling for {first_patient_name}?"
+                                )
+
+                            elif len(current_patient_candidates) >= 3:
+                                initial_response_instructions = (
+                                    "Say exactly and only this sentence, with no extra words: "
+                                    f"Hello, thanks for calling {current_clinic_name}. What is the patient's year of birth?"
                                 )
 
                             else:
