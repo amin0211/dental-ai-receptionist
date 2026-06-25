@@ -325,7 +325,7 @@ async def twilio_realtime(websocket: WebSocket):
             },
         ) as openai_ws:
             print("Connected to OpenAI Realtime")
-            SHORT_AUDIO_MAX_OUTPUT_TOKENS = 80            
+            SHORT_AUDIO_MAX_OUTPUT_TOKENS = 300          
             short_audio_response_instructions = (
                 "Reply in the caller's current language. "
                 "Be extremely brief. "
