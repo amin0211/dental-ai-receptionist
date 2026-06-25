@@ -164,7 +164,7 @@ def find_clinic_by_twilio_number(to_number: str | None):
         result = (
             supabase.table("clinics")
             .select("*")
-            .eq("phone_number", clean_number)
+            .eq("twilio_phone_number", clean_number)
             .limit(1)
             .execute()
         )
