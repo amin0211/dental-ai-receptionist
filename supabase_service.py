@@ -1235,10 +1235,9 @@ def attach_doctor_name_to_slots(
 
     for slot in slots:
         slot_copy = dict(slot)
-        slot_copy["doctor_name"] = doctor_name
 
-        if doctor_name and slot.get("display"):
-            slot_copy["display"] = f"{doctor_name} on {slot.get('display')}"
+        # Internal only. Do not add doctor name to display.
+        slot_copy["doctor_name"] = doctor_name
 
         enriched_slots.append(slot_copy)
 
@@ -1791,7 +1790,23 @@ def reschedule_appointment_for_ai(
             "message_for_ai": "Tell the caller the front desk can help reschedule the appointment.",
         }
 
+def collapse_slots_by_time(slots: list[dict]) -> list[dict]:
+    seen_start_times = set()
+    collapsed_slots = []
 
+    for slot in slots:
+        starts_at = slot.get("starts_at")
+
+        if not starts_at:
+            continue
+
+        if starts_at in seen_start_times:
+            continue
+
+        seen_start_times.add(starts_at)
+        collapsed_slots.append(slot)
+
+    return collapsed_slots
 
 def get_booking_options_for_ai(
     clinic_id: str | None,
@@ -1995,6 +2010,8 @@ def get_booking_options_for_ai(
         all_slots,
         key=lambda slot: slot.get("starts_at") or "",
     )
+
+    all_slots = collapse_slots_by_time(all_slots)
 
     best_slots = all_slots[:2]
 

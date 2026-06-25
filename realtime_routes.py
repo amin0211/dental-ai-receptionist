@@ -325,8 +325,33 @@ async def twilio_realtime(websocket: WebSocket):
             },
         ) as openai_ws:
             print("Connected to OpenAI Realtime")
+            short_audio_response_instructions = (
+                "Reply in the caller's current language. "
+                "Keep the spoken answer very short. "
+                "Use one short sentence when possible. "
+                "Do not use filler phrases like let me check, okay great, absolutely, or thank you repeatedly. "
+                "Ask only one direct question. "
+                "For appointment slot suggestions, use the shortest format: "
+                "'I have two options: [date] at [time], or [date] at [time]. Which works better?' "
+                "Do not mention doctor names in new appointment slot suggestions. "
+                "Do not mention appointment end times. "
+                "Never say the appointment is confirmed. "
+                "Say the front desk will contact them to confirm when needed. "
+            )
 
-            base_realtime_instructions = (
+            voice_cost_control_instructions = (
+                "VOICE COST CONTROL: "
+                "Keep every spoken reply as short as possible while still being clear and polite. "
+                "Avoid long explanations. "
+                "Avoid repeating information unless the caller asks to repeat. "
+                "Avoid filler acknowledgements. "
+                "Normally reply with one sentence. "
+                "When asking a question, ask only the question. "
+                "When offering appointment slots, say only the date and start time. "
+                "Do not say doctor names for new appointment slot suggestions. "
+                "Do not say appointment end times. "
+            )
+            core_realtime_instructions = (
                 "You are a concise, warm, and professional AI receptionist for the dental clinic. "
                 "Start the call naturally by greeting the caller, then follow the IMPORTANT PATIENT CONTEXT exactly. "
                 "Start in neutral English unless the caller clearly speaks another language first. "
@@ -339,7 +364,9 @@ async def twilio_realtime(websocket: WebSocket):
                 "Keep replies short, natural, and receptionist-like. "
                 "Normally ask exactly one question at a time. "
                 "Do not ask for more than one new field in the same reply. "
+            )
 
+            faq_realtime_instructions = (
                 "FAQ HANDLING: "
                 "The caller may ask general clinic questions that are not appointment booking requests. "
                 "Examples include: Do you accept insurance, do you offer direct billing, do you have parking, "
@@ -358,7 +385,9 @@ async def twilio_realtime(websocket: WebSocket):
                 "For emergency-related FAQ, do not diagnose and do not promise treatment. "
                 "If the caller mentions severe swelling, trouble breathing, uncontrolled bleeding, fever, facial trauma, or serious injury, "
                 "advise them to call 911 or go to the nearest emergency room, and if collecting appointment information mark the request as urgent. "
+            )
 
+            working_hours_realtime_instructions = (
                 "WORKING HOURS HANDLING: "
                 "If the caller asks about clinic hours, opening hours, closing time, whether the clinic is open, "
                 "or a specific doctor's working hours, call the get_working_hours tool. "
@@ -371,7 +400,9 @@ async def twilio_realtime(websocket: WebSocket):
                 "Answer only using the tool result. Do not invent hours. "
                 "If the tool says no hours were found, say the front desk can verify the hours. "
                 "Do not treat a working-hours question as an appointment booking request unless the caller clearly says they want to book, schedule, change, or cancel an appointment. "
+            )
 
+            repeat_and_clarity_instructions = (
                 "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
                 "or when the caller says the request is for someone else, or when the patient identity is not clear. "
                 "Use brief natural acknowledgements only when they help the call feel normal, such as: Sure, I can repeat that. "
@@ -379,8 +410,11 @@ async def twilio_realtime(websocket: WebSocket):
                 "If the caller asks to repeat, rephrase, say that again, or asks what you just said, repeat the last meaningful assistant message or the last offered options. "
                 "Do not treat repeat, rephrase, say that again, what did you say, or can you repeat as a date, time, doctor, reason, yes, no, appointment lookup, cancellation, reschedule, or slot choice. "
                 "After repeating or rephrasing, ask the same pending question again. "
+            )
 
-                "If the caller asks about an existing appointment, appointment time, appointment reminder, upcoming appointment, or says phrases like when is my appointment, what time is my appointment, remind me of my appointment, وقت من کیه, ساعت وقتم کیه, do not call get_booking_options. "
+            appointment_lookup_instructions = (
+                "If the caller asks about an existing appointment, appointment time, appointment reminder, upcoming appointment, "
+                "or says phrases like when is my appointment, what time is my appointment, remind me of my appointment, وقت من کیه, ساعت وقتم کیه, do not call get_booking_options. "
                 "First make sure the patient identity is clear and confirmed. "
                 "If one existing patient matches the phone number, ask if the call is for that patient. If yes, use that patient's id. "
                 "If multiple patients match the phone number, ask which patient this is for. After the caller selects one, use that patient's id. "
@@ -390,7 +424,9 @@ async def twilio_realtime(websocket: WebSocket):
                 "If multiple upcoming appointments are returned and the caller asks generally about their appointment time, tell the earliest one first. "
                 "Do not create a new appointment request when the caller only asks to check or remind an existing appointment. "
                 "If no upcoming appointment is found, say you cannot find an upcoming appointment and the front desk can help. "
+            )
 
+            cancellation_instructions = (
                 "If the caller asks to cancel an existing appointment, do not call get_booking_options. "
                 "First confirm the patient identity. Then call get_upcoming_appointments for the confirmed patient. "
                 "If exactly one upcoming appointment is available, repeat that appointment with doctor name, date, and start time, then ask for final yes/no confirmation before cancelling. "
@@ -400,7 +436,9 @@ async def twilio_realtime(websocket: WebSocket):
                 "Never cancel an appointment based on unclear audio, background speech, maybe, or ambiguous yes. "
                 "After cancel_appointment succeeds, tell the caller the appointment has been cancelled. "
                 "If cancel_appointment fails, tell the caller the front desk can help cancel it. "
+            )
 
+            reschedule_instructions = (
                 "If the caller asks to change, move, modify, or reschedule an existing appointment, do not call get_booking_options first. "
                 "First confirm the patient identity. Then call get_upcoming_appointments for the confirmed patient. "
                 "If exactly one upcoming appointment is available, repeat that appointment with doctor name, date, and start time, then ask what date they prefer instead. "
@@ -416,7 +454,9 @@ async def twilio_realtime(websocket: WebSocket):
                 "Never say the new appointment is confirmed. "
                 "Say the front desk will contact them to confirm. "
                 "If reschedule_appointment fails, tell the caller the front desk can help reschedule it. "
+            )
 
+            booking_instructions = (
                 "For appointment booking, do not force the caller to choose a doctor first. "
                 "If the caller already mentions a doctor, remember that doctor preference. "
                 "If the caller does not mention a doctor, ask the reason for the dental visit after patient identity has been handled. "
@@ -444,9 +484,11 @@ async def twilio_realtime(websocket: WebSocket):
                 "If no preferred date is given, search for the earliest available slots. "
                 "Do not ask for a preferred time before using the booking tool. "
                 "The preferred time should normally come from one of the suggested appointment slots. "
-                "After the tool returns slot suggestions, offer exactly two suggestions when two are available. "
-                "Each suggestion must include doctor name, date, and the appointment start time only. "
+                "Even if the selected slot contains doctor_name internally, never include doctor_name in the spoken slot suggestion. "
+                "If the caller requested a specific doctor, search only that doctor internally, but still offer only the date and time to the caller. "
+                "If the caller did not request a specific doctor, search eligible doctors internally, but still offer only the date and time to the caller. "
                 "Do not say the appointment end time to the caller. "
+                "Keep the doctor_id internally from the selected slot, but do not mention the doctor's name to the caller. "
                 "Keep AM or PM when saying times, because 11 AM and 11 PM are different. "
                 "Ask which one works better. "
                 "After slot suggestions are given, classify the caller's next answer as one of: select_suggested_slot, change_doctor, change_date, change_doctor_and_date, reject_without_alternative, ask_question, unclear. "
@@ -456,7 +498,7 @@ async def twilio_realtime(websocket: WebSocket):
                 "If the answer after slot suggestions is unclear, ask: Did you prefer the first option or the second option? "
                 "Do not say the request has been noted until the caller clearly chooses one suggested slot or clearly asks for front desk follow-up. "
                 "Never say the appointment is confirmed. "
-                "If the caller says a different doctor after suggestions, call get_booking_options again with the updated doctor and the same reason and date if available. "
+                "When re-offering slots after a doctor change, do not mention the doctor's name in the slot suggestions. "
                 "If the caller says a different date after suggestions, confirm that date first, then call get_booking_options again with the updated date. "
                 "If the caller says both a different doctor and a different date, update both, confirm the date, then call get_booking_options again. "
                 "If the caller rejects the suggested slots without giving a new doctor or date, ask what date they prefer. "
@@ -464,15 +506,30 @@ async def twilio_realtime(websocket: WebSocket):
                 "If the booking tool says the requested doctor does not provide the treatment, tell the caller that briefly and offer to check another eligible doctor. "
                 "If the booking tool says no slots were found, tell the caller the front desk will contact them to find another time. "
                 "If the booking tool says the service was not matched, ask the caller to briefly repeat the reason for the dental visit. "
+            )
+
+            unclear_audio_and_safety_instructions = (
                 "If the caller's answer is garbled, mixed-language, unrelated, or low-confidence, do not convert it into a name, date, time, doctor, reason, appointment id, cancellation, reschedule, or slot choice. "
                 "Ask the same field again in the last clearly established language. "
                 "Never turn unclear audio into a likely date such as next Tuesday, next Monday, April 22, April 15, or a likely time such as 3 PM or 9:30 AM. "
                 "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
                 "Only clear yes/no answers in the caller's language count as confirmation. "
                 "Do not say the request has been noted until the caller has selected one of the suggested appointment slots, or until the caller agrees that the front desk should follow up. "
-                "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately."
+                "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately. "
             )
 
+            async def create_short_audio_response():
+                await openai_ws.send(
+                    json.dumps(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                "instructions": short_audio_response_instructions
+                            },
+                        }
+                    )
+                )
+                
             async def receive_from_twilio():
                 nonlocal stream_sid
                 nonlocal current_call_id
@@ -629,12 +686,31 @@ async def twilio_realtime(websocket: WebSocket):
                                 "Use this clinic name when greeting the caller. "
                             )
 
+                            realtime_instruction_sections = [
+                                voice_cost_control_instructions,
+                                core_realtime_instructions,
+                                faq_realtime_instructions,
+                                working_hours_realtime_instructions,
+                                repeat_and_clarity_instructions,
+                                appointment_lookup_instructions,
+                                cancellation_instructions,
+                                reschedule_instructions,
+                                booking_instructions,
+                                unclear_audio_and_safety_instructions,
+                                clinic_context,
+                                doctor_context,
+                                patient_context,
+                            ]
+
+                            full_realtime_instructions = "".join(
+                                realtime_instruction_sections
+                            )
                             session_update = {
                                 "type": "session.update",
                                 "session": {
                                     "type": "realtime",
                                     "model": OPENAI_REALTIME_MODEL,
-                                    "instructions": base_realtime_instructions + clinic_context + doctor_context + patient_context,
+                                    "instructions": full_realtime_instructions,
                                     "output_modalities": ["audio"],
                                     "audio": {
                                         "input": {
@@ -1293,9 +1369,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     )
                                 )
 
-                                await openai_ws.send(
-                                    json.dumps({"type": "response.create"})
-                                )
+                                await create_short_audio_response()
 
                             elif tool_name == "get_faq_answer":
                                 try:
@@ -1327,9 +1401,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     )
                                 )
 
-                                await openai_ws.send(
-                                    json.dumps({"type": "response.create"})
-                                )
+                                await create_short_audio_response()
 
                             elif tool_name == "get_working_hours":
                                 try:
@@ -1368,9 +1440,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     )
                                 )
 
-                                await openai_ws.send(
-                                    json.dumps({"type": "response.create"})
-                                )
+                                await create_short_audio_response()
 
                             elif tool_name == "get_upcoming_appointments":
                                 try:
@@ -1405,9 +1475,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     )
                                 )
 
-                                await openai_ws.send(
-                                    json.dumps({"type": "response.create"})
-                                )
+                                await create_short_audio_response()
 
                             elif tool_name == "cancel_appointment":
                                 try:
@@ -1443,10 +1511,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     )
                                 )
 
-                                await openai_ws.send(
-                                    json.dumps({"type": "response.create"})
-                                )
-
+                                await create_short_audio_response()
                             elif tool_name == "reschedule_appointment":
                                 try:
                                     args = json.loads(arguments_raw)
@@ -1492,10 +1557,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     )
                                 )
 
-                                await openai_ws.send(
-                                    json.dumps({"type": "response.create"})
-                                )
-
+                                await create_short_audio_response()
                             else:
                                 print(f"Unknown realtime tool requested: {tool_name}")
 
