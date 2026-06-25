@@ -218,7 +218,7 @@ async def extract_appointment_details_with_openai(
 
                         "PATIENT IDENTITY RULES: "
                         "Use only the provided existing patient candidates. Never invent a patient_id. "
-                        "If exactly one patient candidate was suggested and the caller clearly said yes, correct, that's me, بله, آره, درسته, or similar, "
+                        "If exactly one patient candidate was suggested and the caller clearly gave an affirmative answer in the caller's language, "
                         "set patient_id to that candidate id and patient_identity_confirmed to true. "
                         "If exactly two patient candidates exist and the assistant asked whether the call is for the first patient, "
                         "then a clear yes confirms the first candidate. A clear no means the second candidate should be used and confirmed, "
@@ -228,7 +228,7 @@ async def extract_appointment_details_with_openai(
                         "set patient_id to that candidate id and patient_identity_confirmed to true. "
                         "If the birth year matches none or multiple candidates, do not choose a patient_id. "
                         "If the caller selects a patient by name, handle accent, phonetic, and transliteration variations, "
-                        "for example امین/Ameen/I mean may refer to Amin, and پریسا/Paris/Prisa may refer to Parisa. "
+                        "Handle cross-language transliteration and phonetic variants, such as Persian or other-language pronunciations of English names. "
                         "Only match names against the provided candidates, not the full database. "
                         "If the caller rejected the suggested patient, said it is for someone else, or provided a new name that is not one of the candidates, "
                         "set patient_id to null and patient_identity_confirmed to false, but extract patient_name if clearly provided. "
@@ -240,11 +240,16 @@ async def extract_appointment_details_with_openai(
                         "For date and time confirmation, mark date_confirmed or time_confirmed true if the assistant repeated that value "
                         "and the caller clearly agreed directly after that confirmation question. "
                         "Also mark them true if the assistant offered specific appointment slots and the caller clearly selected one of those slots. "
-                        "Answers like yes, yeah, correct, درست, بله, آره, ja, oui count as confirmation. "
-                        "Answers like no, nope, نه, いや count as rejection. "
+                        "Clear affirmative answers in the caller's language count as confirmation. "                        
+                        "Clear negative answers in the caller's language count as rejection. "
                         "If the caller rejected a repeated date or time, do not save the rejected value. "
                         "If the caller corrected a value and then confirmed it, save the corrected value. "
                         "If the caller selected the first or second offered slot, extract that slot's date and time from the assistant's offered options. "
+                        "CRITICAL SLOT SELECTION RULE: "
+                        "After appointment options are offered, do not treat unclear, garbled, foreign-looking, unrelated, or low-confidence caller audio as a slot selection. "
+                        "Examples of unclear non-selections include random fragments like Энефорстивäгу, background speech, unknown words, or mixed-language noise. "
+                        "The caller selects a slot only if they clearly say first, second, the earlier one, the later one, that one, a specific offered time such as 9 AM or 10 AM, a specific offered date/time, or clearly repeat one of the offered options. "
+                        "If the caller response after slot options is unclear, set preferred_date_raw and preferred_time_raw to null, date_confirmed=false, time_confirmed=false, and explain in notes that no slot was clearly selected. "
                         "If a value is unclear, garbled, mixed-language, or uncertain, set it to null and explain in notes. "
                         "For reason, explicit yes/no confirmation is not required if the caller's reason was understandable."
                     ),
@@ -435,7 +440,7 @@ async def twilio_realtime(websocket: WebSocket):
 # وقت‌های موجود بیمار 
             appointment_lookup_instructions = (
                 "If the caller asks about an existing appointment, appointment time, appointment reminder, upcoming appointment, "
-                "or says phrases like when is my appointment, what time is my appointment, remind me of my appointment, وقت من کیه, ساعت وقتم کیه, do not call get_booking_options. "
+                "or says phrases like when is my appointment, what time is my appointment, remind me of my appointment, or the equivalent in the caller's language, do not call get_booking_options. "
                 "First make sure the patient identity is clear and confirmed. "
                 "If one existing patient matches the phone number, ask if the call is for that patient. If yes, use that patient's id. "
                 "If multiple patients match the phone number, follow the patient identity flow from IMPORTANT PATIENT CONTEXT. "
@@ -520,7 +525,7 @@ async def twilio_realtime(websocket: WebSocket):
 
                 "Do not ask for a preferred time before using the booking tool, but if the caller gives a time preference, keep it. "
                 "If the caller says a time preference such as morning, afternoon, evening, after 2 PM, before noon, or a specific time, keep that as preferred_time_raw. "
-                "If the caller gives a time range such as between 2 and 4, from 3 to 5, بین ۲ تا ۴, or از ۳ تا ۵, keep the full range as preferred_time_raw. "
+                "If the caller gives a time range such as between 2 and 4, from 3 to 5, or the equivalent in the caller's language, keep the full range as preferred_time_raw. "
                 "If the caller says both a different date and time preference, confirm both together, for example: 'Tomorrow afternoon, correct?' "
                 "After the caller confirms the date and time preference, call get_booking_options with preferred_date_raw and preferred_time_raw. "
                 "Never ignore morning, afternoon, evening, after, before, between, from-to, or specific time preferences. "
@@ -538,7 +543,10 @@ async def twilio_realtime(websocket: WebSocket):
                 "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
                 "Only treat the caller as selecting a suggested slot if they clearly say the time, the first one, the second one, the earlier one, the later one, that one, or clearly repeat one of the offered options. "
                 "Do not infer slot selection from unrelated words, names, greetings, foreign-language fragments, background speech, or unclear audio. "
-                "If the answer after slot suggestions is unclear, ask: Did you prefer the first option or the second option? "
+                "If the answer after slot suggestions is unclear, garbled, unrelated, foreign-looking, or low-confidence, do not treat it as slot selection. "
+                "Ask exactly: Did you prefer the first option or the second option? "
+                "Never say the request has been noted after unclear audio. "
+                "Never say the front desk will confirm until the caller clearly chooses the first option, second option, or repeats one offered date/time. "
                 "Do not say the request has been noted until the caller clearly chooses one suggested slot or clearly asks for front desk follow-up. "
                 "Never say the appointment is confirmed. "
                 "When re-offering slots after a doctor change, do not mention the doctor's name in the slot suggestions. "
@@ -681,9 +689,12 @@ async def twilio_realtime(websocket: WebSocket):
                                     "The caller phone number matches one existing patient. "
                                     f"Patient option: id={patient.get('id')}, name={patient.get('full_name')}. "
                                     f"At the start of the call, after greeting, ask: Are you calling for {patient.get('full_name')}? "
-                                    "If the caller says yes, treat this patient as confirmed. "
+                                    "If the caller clearly gives an affirmative answer, treat this patient as confirmed. "
                                     "If the caller repeats the patient's name instead of saying yes, and the name sounds like this patient, treat it as confirmation. "
-                                    "If the caller wants to book a new appointment, continue without asking for the name and ask for the reason for the dental visit. "
+                                    "If the caller clearly gives a negative answer or says the request is for someone else, ask for the patient's full name. "
+                                    "If the caller's answer is unclear, garbled, partial, unrelated, or low-confidence, do not continue to booking. "
+                                    "Ask again whether the call is for the suggested patient. "
+                                    "Only after patient identity is confirmed, ask for the reason for the dental visit. "
                                     "If the caller asks about an existing appointment, call get_upcoming_appointments with this patient's id. "
                                     "If the caller asks to cancel an appointment, call get_upcoming_appointments with this patient's id first. "
                                     "If the caller asks to change or reschedule an appointment, call get_upcoming_appointments with this patient's id first. "
@@ -735,7 +746,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     "and say the patient's name clearly. "
                                     "If no candidate or more than one candidate matches the birth year, ask for the patient's first name or full name. "
                                     "When matching a spoken name, handle accent, phonetic, and transliteration variations, "
-                                    "for example امین/Ameen/I mean may refer to Amin, and پریسا/Paris/Prisa may refer to Parisa. "
+                                    "Handle cross-language transliteration and phonetic variants of candidate names. "
                                     "Only match against the provided candidates, not the full database. "
                                     "If the caller says it is for someone else, ask for the patient's full name. "
                                     "If the caller asks about an existing appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id. "
@@ -829,7 +840,7 @@ async def twilio_realtime(websocket: WebSocket):
                                                         "description": (
                                                             "Preferred time or time range if the caller gave one, such as morning, afternoon, "
                                                             "evening, after 2 PM, before noon, 3 PM, between 2 and 4, from 3 to 5, "
-                                                            "or Persian phrases like بعد از ساعت ۳, بین ۲ تا ۴, از ۳ تا ۵. "
+                                                            "or equivalent time-preference phrases in the caller's language. "
                                                             "Use null if no time preference."
                                                         ),
                                                     },                                                    
@@ -1260,17 +1271,18 @@ async def twilio_realtime(websocket: WebSocket):
                                     for phrase in non_booking_management_phrases
                                 )
 
+                                slot_was_selected = bool(
+                                    preferred_date_raw
+                                    and preferred_time_raw
+                                    and date_confirmed
+                                    and time_confirmed
+                                )
+
                                 should_create_request = (
                                     appointment_request_write_needed
                                     and not is_non_booking_management_call
-                                    and bool(
-                                        patient_name
-                                        or patient_id
-                                        or preferred_doctor_name
-                                        or reason
-                                        or preferred_date_raw
-                                        or preferred_time_raw
-                                    )
+                                    and slot_was_selected
+                                    and bool(reason)
                                 )
 
                                 if should_create_request:
