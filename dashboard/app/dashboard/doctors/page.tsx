@@ -220,6 +220,20 @@ useEffect(() => {
   );
 }, [doctorServices]);
 
+const activeServiceCategories = useMemo(() => {
+  return serviceCategories.filter((service) => service.is_active);
+}, [serviceCategories]);
+
+const enabledActiveServiceCount = useMemo(() => {
+  return activeServiceCategories.filter((service) =>
+    assignedServiceIds.has(service.id)
+  ).length;
+}, [activeServiceCategories, assignedServiceIds]);
+
+const areAllActiveServicesEnabled =
+  activeServiceCategories.length > 0 &&
+  enabledActiveServiceCount === activeServiceCategories.length;
+
 async function handleToggleDoctorService(
 serviceCategoryId: string,
 enabled: boolean
@@ -260,6 +274,54 @@ try {
     );
     setIsUpdatingDoctorService(false);
 }
+}
+
+async function handleToggleAllDoctorServices(enabled: boolean) {
+  try {
+    setErrorMessage("");
+    setSuccessMessage("");
+
+    if (!selectedDoctor) {
+      setErrorMessage("Select a doctor first.");
+      return;
+    }
+
+    if (activeServiceCategories.length === 0) {
+      setErrorMessage("No active services found.");
+      return;
+    }
+
+    setIsUpdatingDoctorService(true);
+
+    await Promise.all(
+      activeServiceCategories.map((service) =>
+        setClinicDoctorServiceActive({
+          clinicId: currentClinicId,
+          doctorId: selectedDoctor.id,
+          serviceCategoryId: service.id,
+          enabled,
+        })
+      )
+    );
+
+    await loadDoctorServices(selectedDoctor.id);
+
+    setSuccessMessage(
+      enabled
+        ? "All services enabled for this doctor."
+        : "All services removed from this doctor."
+    );
+
+    setIsUpdatingDoctorService(false);
+  } catch (error) {
+    console.error("Toggle all doctor services error:", error);
+    setErrorMessage(
+      error instanceof Error
+        ? error.message
+        : "Failed to update doctor services."
+    );
+    setIsUpdatingDoctorService(false);
+  }
 }
   async function handleSelectDoctor(doctorId: string) {
     setSelectedDoctorId(doctorId);
@@ -699,7 +761,38 @@ try {
                 </div>
               </div>
 
-                <div className="p-5">
+              <div className="p-5">
+                {serviceCategories.length > 0 && (
+                  <div className="mb-4 flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <label className="flex cursor-pointer items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={areAllActiveServicesEnabled}
+                        disabled={isUpdatingDoctorService || activeServiceCategories.length === 0}
+                        onChange={(event) =>
+                          handleToggleAllDoctorServices(event.target.checked)
+                        }
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">
+                          Select all services
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {enabledActiveServiceCount} of {activeServiceCategories.length} active services selected
+                        </p>
+                      </div>
+                    </label>
+
+                    {isUpdatingDoctorService && (
+                      <span className="text-xs font-semibold text-slate-500">
+                        Updating...
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-2">
                     {serviceCategories.length === 0 && (
                     <div className="rounded-xl bg-slate-50 p-5 text-center text-sm text-slate-500 md:col-span-2 xl:col-span-3">
