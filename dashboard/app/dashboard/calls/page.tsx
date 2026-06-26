@@ -403,6 +403,9 @@ function CallsPageContent() {
             <table className="w-full min-w-[1150px] text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
+                  <th className="px-5 py-3 font-semibold text-right">
+                    Actions
+                  </th>                  
                   <th className="px-5 py-3 font-semibold">Created</th>
                   <th className="px-5 py-3 font-semibold">Patient</th>
                   <th className="px-5 py-3 font-semibold">Phone</th>
@@ -413,9 +416,6 @@ function CallsPageContent() {
                   <th className="px-5 py-3 font-semibold">Confidence</th>
                   <th className="px-5 py-3 font-semibold">Status</th>
                   <th className="px-5 py-3 font-semibold">Missing</th>
-                  <th className="px-5 py-3 font-semibold text-right">
-                    Actions
-                  </th>
                 </tr>
               </thead>
 

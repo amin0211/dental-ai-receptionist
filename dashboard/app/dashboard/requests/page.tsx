@@ -690,7 +690,7 @@ async function handleChangeStatus(nextStatus: string) {
                   onClick={() => handleChangeStatus("confirmed")}
                   className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
                 >
-                  Confirm
+                  Confirm Appointment
                 </button>
 
                 <button
@@ -699,7 +699,7 @@ async function handleChangeStatus(nextStatus: string) {
                   onClick={() => handleChangeStatus("cancelled")}
                   className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 hover:bg-red-100 disabled:opacity-60"
                 >
-                  Cancel
+                  Cancel Appointment
                 </button>
                 <button
                   type="button"
