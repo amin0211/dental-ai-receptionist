@@ -475,7 +475,7 @@ export default function AppointmentsPage() {
                     <th className="px-5 py-3 font-semibold">Phone</th>
                     <th className="px-5 py-3 font-semibold">Service</th>
                     <th className="px-5 py-3 font-semibold">Doctor</th>
-                    <th className="px-5 py-3 font-semibold">Notes</th>
+                    {/* <th className="px-5 py-3 font-semibold">Notes</th> */}
                     <th className="px-5 py-3 text-right font-semibold">
                       Actions
                     </th>
@@ -515,11 +515,11 @@ export default function AppointmentsPage() {
                           : "-"}
                       </td>
 
-                      <td className="max-w-[260px] px-5 py-4 text-slate-600">
+                      {/* <td className="max-w-[260px] px-5 py-4 text-slate-600">
                         <div className="truncate">
                           {appointment.notes || "-"}
                         </div>
-                      </td>
+                      </td> */}
 
                       <td className="whitespace-nowrap px-5 py-4 text-right">
                         <button
@@ -636,14 +636,14 @@ export default function AppointmentsPage() {
                 </p>
               </div>
 
-              <div className="rounded-xl bg-slate-50 p-4">
+              {/* <div className="rounded-xl bg-slate-50 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Notes
                 </p>
                 <p className="mt-1 text-slate-700">
                   {selectedAppointment.notes || "-"}
                 </p>
-              </div>
+              </div> */}
 
               <button
                 type="button"
