@@ -405,93 +405,110 @@ async function handleChangeStatus(nextStatus: string) {
         )}
 
         {!isLoading && !errorMessage && requests.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1100px] text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-5 py-3 font-semibold">Created</th>
-                  <th className="px-5 py-3 font-semibold">Patient</th>
-                  <th className="px-5 py-3 font-semibold">Phone</th>
-                  <th className="px-5 py-3 font-semibold">Reason</th>
-                  <th className="px-5 py-3 font-semibold">Service</th>
-                  <th className="px-5 py-3 font-semibold">Doctor</th>
-                  <th className="px-5 py-3 font-semibold">Preferred</th>
-                  <th className="px-5 py-3 font-semibold">Status</th>
-                  <th className="px-5 py-3 font-semibold">Urgency</th>
-                  <th className="sticky right-0 z-20 bg-slate-50 px-5 py-3 text-right font-semibold shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-slate-100">
-                {requests.map((request) => (
-                  <tr key={request.id} className="group hover:bg-slate-50">
-                    <td className="whitespace-nowrap px-5 py-4 text-slate-600">
-                      {formatDateTime(request.created_at)}
-                    </td>
-
-                    <td className="px-5 py-4 font-medium text-slate-900">
-                      {request.patient_name || "Unknown"}
-                    </td>
-
-                    <td className="whitespace-nowrap px-5 py-4 text-slate-600">
-                      {request.patient_phone || "-"}
-                    </td>
-
-                    <td className="px-5 py-4 text-slate-700">
-                      {request.reason || "-"}
-                    </td>
-
-                    <td className="px-5 py-4 text-slate-700">
-                      <div>{request.service_category_name || "-"}</div>
-
-                      {request.duration_minutes && (
-                        <div className="mt-1 text-xs text-slate-400">
-                          {request.duration_minutes} min
-                        </div>
-                      )}
-                    </td>
-
-                    <td className="px-5 py-4 text-slate-700">
-                      {request.preferred_doctor_name || "-"}
-                    </td>
-
-                    <td className="px-5 py-4 text-slate-700">
-                      <div>{request.preferred_date_raw || "-"}</div>
-                      <div className="mt-1 text-xs text-slate-400">
-                        {request.preferred_time_raw || ""}
-                      </div>
-                    </td>
-
-                    <td className="px-5 py-4">
-                      <span
-                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${getStatusBadgeClass(
-                          request.status
-                        )}`}
-                      >
-                        {request.status || "unknown"}
-                      </span>
-                    </td>
-
-                    <td className="px-5 py-4 text-slate-700">
-                      {request.urgency || "-"}
-                    </td>
-
-                    <td className="sticky right-0 z-10 bg-white px-5 py-4 text-right shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)] group-hover:bg-slate-50">
-                      <button
-                        type="button"
-                        onClick={() => openRequestDetail(request)}
-                        className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
-                      >
-                        Review
-                      </button>
-                    </td>
+          <div className="flex w-full">
+            {/* Scrollable table */}
+            <div className="min-w-0 flex-1 overflow-x-auto">
+              <table className="w-full min-w-[1000px] text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-5 py-3 font-semibold">Created</th>
+                    <th className="px-5 py-3 font-semibold">Patient</th>
+                    <th className="px-5 py-3 font-semibold">Phone</th>
+                    <th className="px-5 py-3 font-semibold">Reason</th>
+                    <th className="px-5 py-3 font-semibold">Service</th>
+                    <th className="px-5 py-3 font-semibold">Doctor</th>
+                    <th className="px-5 py-3 font-semibold">Preferred</th>
+                    <th className="px-5 py-3 font-semibold">Status</th>
+                    <th className="px-5 py-3 font-semibold">Urgency</th>
                   </tr>
+                </thead>
+
+                <tbody className="divide-y divide-slate-100">
+                  {requests.map((request) => (
+                    <tr key={request.id} className="h-[76px] hover:bg-slate-50">
+                      <td className="whitespace-nowrap px-5 py-4 text-slate-600">
+                        {formatDateTime(request.created_at)}
+                      </td>
+
+                      <td className="px-5 py-4 font-medium text-slate-900">
+                        {request.patient_name || "Unknown"}
+                      </td>
+
+                      <td className="whitespace-nowrap px-5 py-4 text-slate-600">
+                        {request.patient_phone || "-"}
+                      </td>
+
+                      <td className="px-5 py-4 text-slate-700">
+                        <div className="max-w-[220px] truncate">
+                          {request.reason || "-"}
+                        </div>
+                      </td>
+
+                      <td className="px-5 py-4 text-slate-700">
+                        <div>{request.service_category_name || "-"}</div>
+
+                        {request.duration_minutes && (
+                          <div className="mt-1 text-xs text-slate-400">
+                            {request.duration_minutes} min
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="px-5 py-4 text-slate-700">
+                        {request.preferred_doctor_name || "-"}
+                      </td>
+
+                      <td className="px-5 py-4 text-slate-700">
+                        <div>{request.preferred_date_raw || "-"}</div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {request.preferred_time_raw || ""}
+                        </div>
+                      </td>
+
+                      <td className="px-5 py-4">
+                        <span
+                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${getStatusBadgeClass(
+                            request.status
+                          )}`}
+                        >
+                          {request.status || "unknown"}
+                        </span>
+                      </td>
+
+                      <td className="px-5 py-4 text-slate-700">
+                        {request.urgency || "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Fixed actions column */}
+            <div className="w-[120px] shrink-0 border-l border-slate-200 bg-white shadow-[-10px_0_18px_-18px_rgba(15,23,42,0.55)]">
+              <div className="bg-slate-50 px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Actions
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {requests.map((request) => (
+                  <div
+                    key={request.id}
+                    className="flex h-[76px] items-center justify-end px-5 py-4 hover:bg-slate-50"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => openRequestDetail(request)}
+                      className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+                    >
+                      Review
+                    </button>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            </div>
           </div>
+
         )}
       </section>
 
