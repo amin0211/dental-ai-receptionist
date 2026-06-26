@@ -317,7 +317,7 @@ export default function ClinicFaqsPage() {
           </div>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
+        <div className="grid min-w-0 gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4">
               <h2 className="text-lg font-semibold text-slate-900">
@@ -467,8 +467,8 @@ export default function ClinicFaqsPage() {
             </form>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">
                   FAQ List
@@ -478,7 +478,7 @@ export default function ClinicFaqsPage() {
                 </p>
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
@@ -520,8 +520,8 @@ export default function ClinicFaqsPage() {
                       key={faq.id}
                       className="rounded-2xl border border-slate-200 p-4"
                     >
-                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                        <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 flex-col gap-4">
+                        <div className="min-w-0">
                           <div className="mb-2 flex flex-wrap items-center gap-2">
                             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                               {faq.category}
@@ -554,11 +554,11 @@ export default function ClinicFaqsPage() {
                             </span>
                           </div>
 
-                          <h3 className="text-sm font-semibold text-slate-900">
+                          <h3 className="max-w-full break-words text-sm font-semibold leading-6 text-slate-900">
                             {faq.question}
                           </h3>
 
-                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">
+                          <p className="mt-2 max-w-full whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">
                             {faq.answer}
                           </p>
 
@@ -592,7 +592,7 @@ export default function ClinicFaqsPage() {
                           )}
                         </div>
 
-                        <div className="flex shrink-0 flex-wrap gap-2">
+                        <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
                           <button
                             type="button"
                             onClick={() => handleToggleActive(faq)}
