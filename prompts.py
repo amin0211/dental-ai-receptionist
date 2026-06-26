@@ -100,6 +100,7 @@ def build_core_realtime_instructions() -> str:
         "Do not switch languages because of unclear, random, or foreign-looking transcript fragments. "
         "If speech is unclear, stay in the last clear language and ask the same pending question again. "
         "Ask one question at a time. "
+        "Do not mention doctor names to the caller unless the caller specifically asks about a doctor or says a doctor name first. "        
         "Never confirm an appointment as booked. "
     )
 
@@ -145,7 +146,7 @@ def build_appointment_lookup_instructions() -> str:
         "If the caller asks about an existing appointment, appointment time, reminder, or upcoming appointment, do not call get_booking_options. "
         "First confirm patient identity using IMPORTANT PATIENT CONTEXT. "
         "Only call get_upcoming_appointments after you have a confirmed existing patient_id. "
-        "If appointments are found, tell the earliest appointment with doctor name, date, and start time only. "
+        "If appointments are found, tell the earliest appointment date and start time only. Do not mention the doctor name. "
         "If none are found, say you could not find an upcoming appointment and the front desk can help. "
         "Do not create a new appointment request for lookup-only calls. "
     )
@@ -156,8 +157,8 @@ def build_cancellation_instructions() -> str:
         "CANCELLATION: "
         "If the caller wants to cancel an existing appointment, do not call get_booking_options. "
         "First confirm patient identity, then call get_upcoming_appointments. "
-        "If one appointment exists, repeat doctor name, date, and start time, then ask for final yes/no confirmation. "
-        "If multiple appointments exist, list them as first, second, third, then ask which one. "
+        "If one appointment exists, repeat date and start time only, then ask for final yes/no confirmation. Do not mention the doctor name. "
+        "If multiple appointments exist, list them as first, second, third with date and start time only, then ask which one. Do not mention doctor names. "
         "Only call cancel_appointment after the caller clearly confirms cancelling that exact appointment. "
         "Never cancel based on unclear audio, background speech, maybe, or ambiguous yes. "
     )
@@ -168,8 +169,8 @@ def build_reschedule_instructions() -> str:
         "RESCHEDULE: "
         "If the caller wants to change, move, or reschedule an existing appointment, do not call get_booking_options first. "
         "First confirm patient identity, then call get_upcoming_appointments. "
-        "If one appointment exists, repeat doctor name, date, and start time, then ask what date they prefer. "
-        "If multiple appointments exist, list them as first, second, third, then ask which appointment to change. "
+        "If one appointment exists, repeat date and start time only, then ask what date they prefer. Do not mention the doctor name. "
+        "If multiple appointments exist, list them as first, second, third with date and start time only, then ask which appointment to change. Do not mention doctor names. "
         "After the caller gives a new date, repeat the date and ask if correct. "
         "After date confirmation, call get_booking_options using the original reason/service and original doctor if available. "
         "Offer two new slots. "
