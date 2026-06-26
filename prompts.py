@@ -237,7 +237,7 @@ def build_unclear_audio_and_safety_instructions() -> str:
     return (
         "UNCLEAR AUDIO SAFETY: "
         "Do not convert garbled, mixed-language, unrelated, or low-confidence speech into a name, date, time, doctor, reason, appointment id, cancellation, reschedule, or slot choice. "
-        "Ask the same pending question again in the last clear language. "
+        "Ask the same pending question again in the last clear language, except after slot options; after slot options, if first or second cannot be determined, ask exactly: Did you prefer the first option or the second option? "
         "Do not turn unclear audio into likely dates or times. "
         "For slot selection, if the caller's answer sounds closer to first/option one or second/option two, choose the closer offered slot. "
         "Do not map random, unrelated, background, or clearly non-choice speech to first or second. "
@@ -246,7 +246,7 @@ def build_unclear_audio_and_safety_instructions() -> str:
 
         "CONFIRMATION SAFETY: "
         "Repeat the same yes/no question once. "
-ط    )
+    )
 
 
 def build_doctor_context(current_doctors: list[dict]) -> str:
