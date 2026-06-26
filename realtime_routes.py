@@ -1328,18 +1328,9 @@ async def twilio_realtime(websocket: WebSocket):
                                     for phrase in non_booking_management_phrases
                                 )
 
-                                slot_was_selected = bool(
-                                    preferred_date_raw
-                                    and preferred_time_raw
-                                    and date_confirmed
-                                    and time_confirmed
-                                )
-
                                 should_create_request = (
                                     appointment_request_write_needed
                                     and not is_non_booking_management_call
-                                    and slot_was_selected
-                                    and bool(reason)
                                 )
 
                                 if should_create_request:
