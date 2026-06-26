@@ -592,6 +592,13 @@ export default function CalendarPage() {
         return;
       }
 
+      const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+      if (!timePattern.test(formStartTime) || !timePattern.test(formEndTime)) {
+        setFormErrorMessage("Time must be in HH:MM format, for example 09:00 or 17:30.");
+        return;
+      }
+
       if (formStartTime >= formEndTime) {
         setFormErrorMessage("Start time must be before end time.");
         return;
@@ -683,6 +690,13 @@ export default function CalendarPage() {
         setFormErrorMessage("Repeat until is required for only this day.");
         return;
       }
+      
+      const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+      if (!timePattern.test(formStartTime) || !timePattern.test(formEndTime)) {
+        setFormErrorMessage("Time must be in HH:MM format, for example 09:00 or 17:30.");
+        return;
+      }      
 
       if (formStartTime >= formEndTime) {
         setFormErrorMessage("Start time must be before end time.");
@@ -1250,10 +1264,12 @@ function AvailabilityModal({
                 Start Time
               </label>
               <input
-                type="time"
+                type="text"
+                inputMode="numeric"
+                placeholder="09:00"
                 value={formStartTime}
                 onChange={(event) => setFormStartTime(event.target.value)}
-                className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-[52px] w-full rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-blue-500"
               />
             </div>
 
@@ -1262,10 +1278,12 @@ function AvailabilityModal({
                 End Time
               </label>
               <input
-                type="time"
+                type="text"
+                inputMode="numeric"
+                placeholder="17:00"
                 value={formEndTime}
                 onChange={(event) => setFormEndTime(event.target.value)}
-                className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                className="mt-2 h-[52px] w-full rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-blue-500"
               />
             </div>
           </div>
