@@ -1,5 +1,5 @@
 # prompts.py
-
+import json
 
 def build_extraction_system_prompt(
     doctor_list_text: str,
@@ -48,11 +48,13 @@ def build_extraction_system_prompt(
         "Never infer doctor_id from transcript. Use only booking_options_history. "
 
         "CRITICAL SLOT SELECTION RULE: "
-        "After appointment options are offered, do not treat unclear, garbled, foreign-looking, unrelated, or low-confidence caller audio as a slot selection. "
-        "Invalid examples include Tekanwa, Førstebarn, Kjozde, ん, えー, Hallo, hello, yes, okay, mm-hmm, background speech, random fragments, or mixed-language noise. "
-        "The caller selects a slot only if they clearly say first, first one, option one, second, second one, option two, earlier one, later one, "
-        "a specific offered time, a specific offered date/time, or clearly repeat one of the offered options. "
-        "If the caller response after slot options is unclear, set preferred_date_raw and preferred_time_raw to null, "
+        "After appointment options are offered, accept first/second choices even if the wording, accent, pronunciation, or transcription is not exact. "
+        "Choose the first offered slot if the caller's answer sounds closer to first, first one, option one, the first, earlier one, or first option. "
+        "Choose the second offered slot if the caller's answer sounds closer to second, second one, option two, the second, later one, or second option. "
+        "If the caller repeats an offered time or offered date/time, match it to the corresponding offered slot. "
+        "Do not choose first or second if the caller asks for a different date, different time, another option, neither option, or says the offered options do not work. "
+        "Do not treat yes, okay, hello, mm-hmm, background speech, random fragments, or unrelated speech as a slot choice. "
+        "If the caller response after slot options cannot reasonably be mapped to either offered slot, set preferred_date_raw and preferred_time_raw to null, "
         "date_confirmed=false, time_confirmed=false, selected_slot_doctor_id=null, selected_slot_doctor_name=null, "
         "and explain in notes that no slot was clearly selected. "
 
@@ -64,27 +66,6 @@ def build_extraction_system_prompt(
 
 def build_short_audio_response_instructions() -> str:
     return (
-        "Reply in the caller's current language. "
-        "Be brief and natural. "
-        "Ask only one question at a time. "
-        "Do not explain your process. "
-        "Do not say okay, sure, thank you, one moment, let me check, or I will check before using a tool. "
-        "When a tool is needed, call the tool silently first, then answer with the result. "
-
-        "CONFIRMATION RULE: "
-        "Valid yes examples: yes, yeah, correct, right, that's right, sure, بله, آره, درسته. "
-        "Valid no examples: no, nope, incorrect, not correct, نه, خیر, درست نیست. "
-        "If the caller's answer is unclear, ambiguous, garbled, unrelated, foreign-looking, or not in the valid yes/no list, do not treat it as confirmation or rejection. "
-        "Do not move to the next step. "
-        "Ask the exact same confirmation question one more time. "
-
-        "For appointment slots, always say exactly: "
-        "'Two options: [date] at [time], or [date] at [time]. Which works?' "
-        "Use only each slot's display field when speaking appointment options. "
-        "Do not speak starts_at, date, start_time, or the year unless the display field includes it. "
-        "Never shorten the second option to only the time. "
-        "Do not mention doctor names or end times in new appointment slot suggestions. "
-        "Never say an appointment is confirmed. "
 
         "For FAQ answers, use one short sentence. "
         "For working hours, answer with only the day and hours. "
@@ -201,7 +182,6 @@ def build_booking_instructions() -> str:
     return (
         "BOOKING FLOW: "
         "For new appointment booking, first confirm patient identity using IMPORTANT PATIENT CONTEXT. "
-        "Do not force the caller to choose a doctor. "
         "If the caller mentions a doctor, keep it as doctor_name. "
         "After identity is handled, ask for the dental visit reason. "
 
@@ -234,14 +214,15 @@ def build_booking_instructions() -> str:
         "Do not mention doctor names or end times. "
 
         "SLOT SELECTION AND CONFIRMATION RULES: "
-        "When asking any confirmation question, continue only after a clear valid answer. "
-        "If the caller gives an unclear, ambiguous, garbled, unrelated, or invalid answer, do not advance the flow and repeat the same confirmation question once. "
-        "For slot selection, valid answers are only: first, first one, option one, second, second one, option two, earlier one, later one, or an exact offered time. "
-        "Invalid examples: Tekanwa, Tekkenman, Førstebarn, Kjozde, ん, えー, Hallo, hello, yes after a which-option question, okay after a which-option question, background speech. "
-        "If the answer after slot options is not a valid slot choice, ask exactly once: Did you prefer the first option or the second option? "
+        "For slot selection, accept first/second choices even if the wording, accent, pronunciation, or transcription is not exact. "
+        "Choose the first offered slot if the caller's answer sounds closer to first, first one, option one, the first, earlier one, or first option. "
+        "Choose the second offered slot if the caller's answer sounds closer to second, second one, option two, the second, later one, or second option. "
+        "If the caller repeats an offered time or offered date/time, choose the matching offered slot. "
+        "Do not choose first or second if the caller asks for a different date, different time, another option, neither option, or says the offered options do not work. "
+        "Do not treat yes, okay, hello, mm-hmm, background speech, random fragments, or unrelated speech as a slot choice. "
+        "If it is still not possible to tell first or second, ask exactly once: Did you prefer the first option or the second option? "
         "If still unclear after that, say: The front desk will contact you to find the best time. "
         "Never say the request is noted until a clear slot choice is made. "
-        "Never say the appointment is confirmed. "
 
         "FOLLOW-UP RULES: "
         "If no slots are found, say the front desk will contact them to find another time. "
@@ -258,18 +239,14 @@ def build_unclear_audio_and_safety_instructions() -> str:
         "Do not convert garbled, mixed-language, unrelated, or low-confidence speech into a name, date, time, doctor, reason, appointment id, cancellation, reschedule, or slot choice. "
         "Ask the same pending question again in the last clear language. "
         "Do not turn unclear audio into likely dates or times. "
-        "Only clear yes/no answers count for yes/no questions. "
-        "For slot selection, unclear audio is not first or second. "
-        "If slot selection is unclear, ask once: Did you prefer the first option or the second option? "
+        "For slot selection, if the caller's answer sounds closer to first/option one or second/option two, choose the closer offered slot. "
+        "Do not map random, unrelated, background, or clearly non-choice speech to first or second. "
+        "Do not map the answer to first or second if the caller asks for a different date, different time, another option, neither option, or says the offered options do not work. "
         "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately. "
 
         "CONFIRMATION SAFETY: "
-        "If the pending question expects yes/no and the caller's answer is not in the valid yes/no set, do not advance. "
         "Repeat the same yes/no question once. "
-        "If the pending question expects first/second slot choice and the caller's answer is not a valid slot choice, do not advance. "
-        "Ask exactly once: Did you prefer the first option or the second option? "
-        "Never map unclear words to yes, no, first, or second. "
-    )
+ط    )
 
 
 def build_doctor_context(current_doctors: list[dict]) -> str:
@@ -286,7 +263,6 @@ def build_doctor_context(current_doctors: list[dict]) -> str:
             "Do not force the caller to choose a doctor. "
             "If the caller mentions a doctor, keep that doctor preference for booking search. "
             "If no doctor is mentioned, use eligible doctors internally. "
-            "Never mention doctor names in new appointment slot suggestions. "
         )
 
     return (
@@ -294,7 +270,6 @@ def build_doctor_context(current_doctors: list[dict]) -> str:
         "This clinic has zero or one active doctor. "
         "Do not ask which doctor the caller prefers. "
         "Use the available doctor internally for booking search when possible. "
-        "Never mention doctor names in new appointment slot suggestions. "
     )
 
 
@@ -319,7 +294,6 @@ def build_patient_context(
             " IMPORTANT PATIENT CONTEXT: "
             "The caller phone number matches one existing patient. "
             f"Patient option: id={patient.get('id')}, name={patient_name}. "
-            "Do not ask for patient identity at the start of the call. "
             "Only when the caller wants to book, check, cancel, or reschedule an appointment, ask: "
             f"Is this for {patient_name}? "
             "If the caller clearly says yes, use this patient's id and treat identity as confirmed. "
@@ -345,7 +319,6 @@ def build_patient_context(
             f"First patient option: name={first_name}, id={first_patient.get('id')}. "
             f"Second patient option: name={second_name}, id={second_patient.get('id')}. "
             f"Internal patient candidates for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
-            "Do not ask for patient identity at the start of the call. "
             "Only when the caller wants to book, check, cancel, or reschedule an appointment, ask exactly: "
             f"Is this for {first_name}? "
             f"If the caller clearly says yes, use {first_name}'s patient id and treat identity as confirmed. "
@@ -363,7 +336,6 @@ def build_patient_context(
             " IMPORTANT PATIENT CONTEXT: "
             "The caller phone number matches three or more existing patients, likely a family phone number. "
             f"Internal patient candidates for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
-            "Do not ask for patient identity at the start of the call. "
             "Only when the caller wants to book, check, cancel, or reschedule an appointment, ask for the patient's year of birth. "
             "Do not read all patient names. "
             "Match the birth year only against the provided patient candidates from this phone number. "
@@ -378,7 +350,6 @@ def build_patient_context(
     return (
         " IMPORTANT PATIENT CONTEXT: "
         "No existing patient was found for this caller phone number. "
-        "Do not ask for the patient's full name at the start of the call. "
         "Only when the caller wants to book, check, cancel, or reschedule an appointment, ask for the patient's full name. "
         "For appointment lookup, cancellation, or reschedule requests, explain that the front desk can help verify the appointment if no existing patient can be confirmed. "
     )
