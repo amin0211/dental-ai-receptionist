@@ -405,63 +405,65 @@ async function handleChangeStatus(nextStatus: string) {
         )}
 
         {!isLoading && !errorMessage && requests.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+          <div className="relative min-w-0 w-full max-w-full overflow-x-auto">
+            <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-left text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Created
                   </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Patient
                   </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Phone
                   </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Reason
                   </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Service
                   </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Doctor
                   </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Preferred
                   </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Status
                   </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Urgency
                   </th>
-                  <th className="sticky right-0 z-10 bg-slate-50 px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="sticky right-0 z-30 border-b border-l border-slate-200 bg-slate-50 px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]">
                     Actions
                   </th>
                 </tr>
               </thead>
 
-              <tbody className="divide-y divide-slate-200 bg-white">
+              <tbody className="bg-white">
                 {requests.map((request) => (
                   <tr key={request.id} className="hover:bg-slate-50">
-                    <td className="whitespace-nowrap px-5 py-4 text-slate-600">
+                    <td className="whitespace-nowrap border-b border-slate-100 px-5 py-4 text-slate-600">
                       {formatDateTime(request.created_at)}
                     </td>
 
-                    <td className="px-5 py-4 font-medium text-slate-900">
+                    <td className="border-b border-slate-100 px-5 py-4 font-medium text-slate-900">
                       {request.patient_name || "Unknown"}
                     </td>
 
-                    <td className="whitespace-nowrap px-5 py-4 text-slate-600">
+                    <td className="whitespace-nowrap border-b border-slate-100 px-5 py-4 text-slate-600">
                       {request.patient_phone || "-"}
                     </td>
 
-                    <td className="px-5 py-4 text-slate-700">
-                      {request.reason || "-"}
+                    <td className="border-b border-slate-100 px-5 py-4 text-slate-700">
+                      <div className="max-w-[240px] truncate">
+                        {request.reason || "-"}
+                      </div>
                     </td>
 
-                    <td className="px-5 py-4 text-slate-700">
+                    <td className="border-b border-slate-100 px-5 py-4 text-slate-700">
                       <div>{request.service_category_name || "-"}</div>
 
                       {request.duration_minutes && (
@@ -471,18 +473,18 @@ async function handleChangeStatus(nextStatus: string) {
                       )}
                     </td>
 
-                    <td className="px-5 py-4 text-slate-700">
+                    <td className="border-b border-slate-100 px-5 py-4 text-slate-700">
                       {request.preferred_doctor_name || "-"}
                     </td>
 
-                    <td className="px-5 py-4 text-slate-700">
+                    <td className="border-b border-slate-100 px-5 py-4 text-slate-700">
                       <div>{request.preferred_date_raw || "-"}</div>
                       <div className="mt-1 text-xs text-slate-400">
                         {request.preferred_time_raw || ""}
                       </div>
                     </td>
 
-                    <td className="px-5 py-4">
+                    <td className="border-b border-slate-100 px-5 py-4">
                       <span
                         className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${getStatusBadgeClass(
                           request.status
@@ -492,11 +494,11 @@ async function handleChangeStatus(nextStatus: string) {
                       </span>
                     </td>
 
-                    <td className="px-5 py-4 text-slate-700">
+                    <td className="border-b border-slate-100 px-5 py-4 text-slate-700">
                       {request.urgency || "-"}
                     </td>
 
-                    <td className="sticky right-0 bg-white px-5 py-4 text-right align-top shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.35)]">
+                    <td className="sticky right-0 z-20 border-b border-l border-slate-100 bg-white px-5 py-4 text-right align-top shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]">
                       <button
                         type="button"
                         onClick={() => openRequestDetail(request)}
