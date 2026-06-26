@@ -50,6 +50,7 @@ async def extract_appointment_details_with_openai(
     transcript: str,
     doctors: list[dict] | None = None,
     patient_candidates: list[dict] | None = None,
+    booking_options_history: list[dict] | None = None,
 ) -> dict:
     if not openai_client:
         return {
@@ -58,6 +59,8 @@ async def extract_appointment_details_with_openai(
             "patient_name": None,
             "preferred_doctor_name": None,
             "doctor_confirmed": False,
+            "selected_slot_doctor_id": None,
+            "selected_slot_doctor_name": None,            
             "reason": None,
             "preferred_date_raw": None,
             "preferred_time_raw": None,
@@ -83,10 +86,10 @@ async def extract_appointment_details_with_openai(
 
     patient_options = build_patient_options_for_ai(patient_candidates or [])
 
-    patient_list_text = (
-        json.dumps(patient_options, ensure_ascii=False)
-        if patient_options
-        else "No existing patients were found for the caller phone number."
+    booking_options_text = (
+        json.dumps(booking_options_history or [], ensure_ascii=False)
+        if booking_options_history
+        else "No booking options were offered."
     )
 
     schema = {
@@ -128,6 +131,22 @@ async def extract_appointment_details_with_openai(
                     "Explicit yes/no confirmation is not required."
                 ),
             },
+            "selected_slot_doctor_id": {
+                "type": ["string", "null"],
+                "description": (
+                    "Doctor id from the selected offered appointment slot. "
+                    "Use only doctor_id values from the provided booking_options_history. "
+                    "Set null if no offered slot was clearly selected."
+                ),
+            },
+            "selected_slot_doctor_name": {
+                "type": ["string", "null"],
+                "description": (
+                    "Doctor name from the selected offered appointment slot. "
+                    "Use only doctor_name values from the provided booking_options_history. "
+                    "Set null if no offered slot was clearly selected."
+                ),
+            },            
             "reason": {
                 "type": ["string", "null"],
                 "description": "Dental visit reason only if clearly provided or understandable.",
@@ -189,6 +208,8 @@ async def extract_appointment_details_with_openai(
             "patient_name",
             "preferred_doctor_name",
             "doctor_confirmed",
+            "selected_slot_doctor_id",
+            "selected_slot_doctor_name",
             "reason",
             "preferred_date_raw",
             "preferred_time_raw",
@@ -215,6 +236,7 @@ async def extract_appointment_details_with_openai(
                         "Do not guess or invent patient names, patient ids, doctor names, dates, times, or reasons. "
                         f"The available doctors for this clinic are: {doctor_list_text}. "
                         f"Existing patient candidates for the caller phone are: {patient_list_text}. "
+                        f"Booking options offered during the call are: {booking_options_text}. "
 
                         "PATIENT IDENTITY RULES: "
                         "Use only the provided existing patient candidates. Never invent a patient_id. "
@@ -245,6 +267,10 @@ async def extract_appointment_details_with_openai(
                         "If the caller rejected a repeated date or time, do not save the rejected value. "
                         "If the caller corrected a value and then confirmed it, save the corrected value. "
                         "If the caller selected the first or second offered slot, extract that slot's date and time from the assistant's offered options. "
+                        "If the caller selected the first or second offered slot, also extract selected_slot_doctor_id and selected_slot_doctor_name from booking_options_history. "
+                        "Use the slot order exactly as offered: first means slots[0], second means slots[1]. "
+                        "If the caller selected by repeating an offered date/time, match it to the corresponding offered slot and use that slot's doctor_id and doctor_name. "
+                        "Never infer doctor_id from the transcript. Use only booking_options_history. "
                         "CRITICAL SLOT SELECTION RULE: "
                         "After appointment options are offered, do not treat unclear, garbled, foreign-looking, unrelated, or low-confidence caller audio as a slot selection. "
                         "Examples of unclear non-selections include random fragments like Энефорстивäгу, background speech, unknown words, or mixed-language noise. "
@@ -313,6 +339,7 @@ async def twilio_realtime(websocket: WebSocket):
     current_caller_phone = None
     current_doctors = []
     current_patient_candidates = []
+    booking_options_history = []
 
     appointment_request_write_needed = False
     realtime_session_ready = False
@@ -601,6 +628,7 @@ async def twilio_realtime(websocket: WebSocket):
                 nonlocal transcript_parts
                 nonlocal current_doctors
                 nonlocal current_patient_candidates
+                nonlocal booking_options_history
                 nonlocal realtime_session_ready
 
                 try:
@@ -644,6 +672,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 clinic_id=clinic_id,
                                 phone=caller,
                             )
+                            booking_options_history = []
 
                             print(f"Patient candidates for caller phone: {current_patient_candidates}")
 
@@ -1120,23 +1149,33 @@ async def twilio_realtime(websocket: WebSocket):
                                     full_transcript,
                                     current_doctors,
                                     current_patient_candidates,
+                                    booking_options_history,
                                 )
 
                                 preferred_doctor_name = appointment_details.get("preferred_doctor_name")
 
-                                matched_doctor = match_doctor_from_name(
-                                    current_doctors,
-                                    preferred_doctor_name,
-                                )
+                                selected_slot_doctor_id = appointment_details.get("selected_slot_doctor_id")
+                                selected_slot_doctor_name = appointment_details.get("selected_slot_doctor_name")
 
-                                doctor_id = matched_doctor["id"] if matched_doctor else None
+                                doctor_id = selected_slot_doctor_id or None
 
-                                if matched_doctor:
-                                    preferred_doctor_name = (
-                                        matched_doctor.get("display_name")
-                                        or matched_doctor.get("full_name")
-                                        or preferred_doctor_name
+                                if selected_slot_doctor_name:
+                                    preferred_doctor_name = selected_slot_doctor_name
+
+                                if not doctor_id:
+                                    matched_doctor = match_doctor_from_name(
+                                        current_doctors,
+                                        preferred_doctor_name,
                                     )
+
+                                    doctor_id = matched_doctor["id"] if matched_doctor else None
+
+                                    if matched_doctor:
+                                        preferred_doctor_name = (
+                                            matched_doctor.get("display_name")
+                                            or matched_doctor.get("full_name")
+                                            or preferred_doctor_name
+                                        )
 
                                 print(
                                     "Final appointment details extracted after call: "
@@ -1369,6 +1408,7 @@ async def twilio_realtime(websocket: WebSocket):
                 nonlocal ai_transcript_buffer
                 nonlocal current_clinic_id
                 nonlocal current_doctors
+                nonlocal booking_options_history
                 nonlocal openai_usage_totals
                 nonlocal current_call_id
                 nonlocal appointment_request_write_needed
@@ -1460,6 +1500,20 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 print(f"Realtime booking tool result: {tool_result}")
+                                if tool_result.get("ok") and tool_result.get("slots"):
+                                    booking_options_history.append(
+                                        {
+                                            "tool_call_index": len(booking_options_history) + 1,
+                                            "doctor_name_requested": args.get("doctor_name"),
+                                            "reason": args.get("reason"),
+                                            "preferred_date_raw": args.get("preferred_date_raw"),
+                                            "preferred_time_raw": args.get("preferred_time_raw"),
+                                            "preferred_date_confirmed": bool(
+                                                args.get("preferred_date_confirmed")
+                                            ),
+                                            "slots": tool_result.get("slots") or [],
+                                        }
+                                    )                                
 
                                 await openai_ws.send(
                                     json.dumps(
