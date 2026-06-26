@@ -42,15 +42,32 @@ type DoctorServiceRow = {
   is_active: boolean | null;
 };
 
+type BookedSegment = {
+  id: string;
+  startTime: string;
+  endTime: string;
+  topPercent: number;
+  heightPercent: number;
+  appointment: Appointment;
+};
+
 type Slot = {
   id: string;
   date: string;
+
   startTime: string;
   endTime: string;
   startDateTime: Date;
   endDateTime: Date;
+
+  selectableStartTime: string | null;
+  selectableEndTime: string | null;
+  selectableStartDateTime: Date | null;
+  selectableEndDateTime: Date | null;
+
   isBooked: boolean;
   bookedAppointment: Appointment | null;
+  bookedSegments: BookedSegment[];
 };
 
 const WEEK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -141,6 +158,92 @@ function appointmentOverlapsSlot({
   const appointmentEnd = new Date(appointment.end_time);
 
   return appointmentStart < slotEnd && appointmentEnd > slotStart;
+}
+
+function rangesOverlap(
+  startA: number,
+  endA: number,
+  startB: number,
+  endB: number
+) {
+  return startA < endB && endA > startB;
+}
+
+function getAppointmentMinutesForDate(
+  appointment: Appointment,
+  dateString: string
+) {
+  const appointmentStart = new Date(appointment.start_time);
+  const appointmentEnd = new Date(appointment.end_time);
+
+  const appointmentDateString = getLocalDateStringFromIso(
+    appointment.start_time
+  );
+
+  if (appointmentDateString !== dateString) {
+    return null;
+  }
+
+  return {
+    appointment,
+    startMinutes:
+      appointmentStart.getHours() * 60 + appointmentStart.getMinutes(),
+    endMinutes: appointmentEnd.getHours() * 60 + appointmentEnd.getMinutes(),
+  };
+}
+
+function findSelectableTimeInsideDisplayBlock({
+  displayStartMinutes,
+  displayEndMinutes,
+  availabilityEndMinutes,
+  bookedRanges,
+  durationMinutes,
+}: {
+  displayStartMinutes: number;
+  displayEndMinutes: number;
+  availabilityEndMinutes: number;
+  bookedRanges: {
+    appointment: Appointment;
+    startMinutes: number;
+    endMinutes: number;
+  }[];
+  durationMinutes: number;
+}) {
+  const candidateStarts = new Set<number>();
+
+  candidateStarts.add(displayStartMinutes);
+
+  bookedRanges.forEach((range) => {
+    if (
+      range.endMinutes > displayStartMinutes &&
+      range.endMinutes < displayEndMinutes
+    ) {
+      candidateStarts.add(range.endMinutes);
+    }
+  });
+
+  const sortedCandidates = Array.from(candidateStarts).sort((a, b) => a - b);
+
+  return (
+    sortedCandidates.find((candidateStart) => {
+      const candidateEnd = candidateStart + durationMinutes;
+
+      if (candidateStart < displayStartMinutes) return false;
+      if (candidateStart >= displayEndMinutes) return false;
+      if (candidateEnd > availabilityEndMinutes) return false;
+
+      const hasConflict = bookedRanges.some((range) =>
+        rangesOverlap(
+          candidateStart,
+          candidateEnd,
+          range.startMinutes,
+          range.endMinutes
+        )
+      );
+
+      return !hasConflict;
+    }) || null
+  );
 }
 
 function getDateLabel(date: Date) {
@@ -496,26 +599,100 @@ export default function AppointmentScheduleEditor({
         const startMinutes = timeToMinutes(startTime);
         const endMinutes = timeToMinutes(endTime);
 
+        const bookedRanges = appointments
+          .map((appointmentRow) =>
+            getAppointmentMinutesForDate(appointmentRow, dateString)
+          )
+          .filter((range): range is NonNullable<typeof range> => {
+            if (!range) return false;
+
+            if (mode === "edit" && appointment?.id === range.appointment.id) {
+              return false;
+            }
+
+            return rangesOverlap(
+              range.startMinutes,
+              range.endMinutes,
+              startMinutes,
+              endMinutes
+            );
+          })
+          .map((range) => ({
+            ...range,
+            startMinutes: Math.max(range.startMinutes, startMinutes),
+            endMinutes: Math.min(range.endMinutes, endMinutes),
+          }))
+          .sort((a, b) => a.startMinutes - b.startMinutes);
+
         for (
           let current = startMinutes;
           current + durationMinutes <= endMinutes;
           current += durationMinutes
         ) {
-          const slotStartTime = minutesToTime(current);
-          const slotEndTime = minutesToTime(current + durationMinutes);
+          const displayStartMinutes = current;
+          const displayEndMinutes = current + durationMinutes;
+
+          const slotStartTime = minutesToTime(displayStartMinutes);
+          const slotEndTime = minutesToTime(displayEndMinutes);
 
           const startDateTime = buildLocalDateTime(dateString, slotStartTime);
           const endDateTime = buildLocalDateTime(dateString, slotEndTime);
 
-          const bookedAppointment =
-            appointments.find((appointmentRow) =>
-              appointmentOverlapsSlot({
-                appointment: appointmentRow,
-                slotStart: startDateTime,
-                slotEnd: endDateTime,
-                ignoreAppointmentId: mode === "edit" ? appointment?.id : null,
-              })
-            ) || null;
+          const bookedSegments = bookedRanges
+            .filter((range) =>
+              rangesOverlap(
+                range.startMinutes,
+                range.endMinutes,
+                displayStartMinutes,
+                displayEndMinutes
+              )
+            )
+            .map((range) => {
+              const overlapStart = Math.max(
+                range.startMinutes,
+                displayStartMinutes
+              );
+              const overlapEnd = Math.min(
+                range.endMinutes,
+                displayEndMinutes
+              );
+              const displayDuration = displayEndMinutes - displayStartMinutes;
+
+              return {
+                id: range.appointment.id,
+                startTime: minutesToTime(overlapStart),
+                endTime: minutesToTime(overlapEnd),
+                topPercent:
+                  ((overlapStart - displayStartMinutes) / displayDuration) *
+                  100,
+                heightPercent:
+                  ((overlapEnd - overlapStart) / displayDuration) * 100,
+                appointment: range.appointment,
+              };
+            });
+
+          const selectableStartMinutes = findSelectableTimeInsideDisplayBlock({
+            displayStartMinutes,
+            displayEndMinutes,
+            availabilityEndMinutes: endMinutes,
+            bookedRanges,
+            durationMinutes,
+          });
+
+          const selectableEndMinutes =
+            selectableStartMinutes !== null
+              ? selectableStartMinutes + durationMinutes
+              : null;
+
+          const selectableStartTime =
+            selectableStartMinutes !== null
+              ? minutesToTime(selectableStartMinutes)
+              : null;
+
+          const selectableEndTime =
+            selectableEndMinutes !== null
+              ? minutesToTime(selectableEndMinutes)
+              : null;
 
           const slotId = `${dateString}:${slotStartTime}:${slotEndTime}`;
 
@@ -530,11 +707,26 @@ export default function AppointmentScheduleEditor({
             endTime: slotEndTime,
             startDateTime,
             endDateTime,
-            isBooked: Boolean(bookedAppointment),
-            bookedAppointment,
+
+            selectableStartTime,
+            selectableEndTime,
+            selectableStartDateTime: selectableStartTime
+              ? buildLocalDateTime(dateString, selectableStartTime)
+              : null,
+            selectableEndDateTime: selectableEndTime
+              ? buildLocalDateTime(dateString, selectableEndTime)
+              : null,
+
+            isBooked: !selectableStartTime,
+            bookedAppointment: bookedSegments[0]?.appointment || null,
+            bookedSegments,
           });
         }
       });
+
+      map[dateString].sort(
+        (a, b) => a.startDateTime.getTime() - b.startDateTime.getTime()
+      );
     });
 
     return map;
@@ -752,8 +944,15 @@ export default function AppointmentScheduleEditor({
       endTime,
       startDateTime: new Date(appointment.start_time),
       endDateTime: new Date(appointment.end_time),
+
+      selectableStartTime: startTime,
+      selectableEndTime: endTime,
+      selectableStartDateTime: new Date(appointment.start_time),
+      selectableEndDateTime: new Date(appointment.end_time),
+
       isBooked: false,
       bookedAppointment: null,
+      bookedSegments: [],
     });
   }, [mode, appointment]);
 
@@ -831,13 +1030,23 @@ export default function AppointmentScheduleEditor({
       allSlotsForWeek.find((slot) => {
         return (
           slot.date === preferredDateFromRequest &&
-          slot.startTime === preferredTimeFromRequest
+          slot.selectableStartTime === preferredTimeFromRequest &&
+          slot.selectableStartDateTime &&
+          slot.selectableEndDateTime
         );
       }) || null;
 
     if (!matchedSlot) return;
 
-    setSelectedSlot(matchedSlot);
+    setSelectedSlot({
+      ...matchedSlot,
+      startTime: matchedSlot.selectableStartTime as string,
+      endTime: matchedSlot.selectableEndTime as string,
+      startDateTime: matchedSlot.selectableStartDateTime as Date,
+      endDateTime: matchedSlot.selectableEndDateTime as Date,
+      isBooked: false,
+      bookedAppointment: null,
+    });
   }, [
     mode,
     request,
@@ -1409,50 +1618,86 @@ export default function AppointmentScheduleEditor({
                       )}
 
                       {daySlots.map((slot) => {
-                        const isSelected = selectedSlot?.id === slot.id;
+                        const isSelected =
+                          selectedSlot?.date === slot.date &&
+                          selectedSlot?.startTime === slot.selectableStartTime &&
+                          selectedSlot?.endTime === slot.selectableEndTime;
 
-                        if (slot.isBooked) {
-                          return (
-                            <div
-                              key={slot.id}
-                              className={`rounded-xl border px-3 py-2 text-xs ${
-                                isSelected
-                                  ? "border-amber-300 bg-amber-50 text-amber-800 ring-2 ring-amber-300"
-                                  : "border-red-200 bg-red-50 text-red-700"
-                              }`}
-                            >
-                              <div className="font-bold">
-                                {slot.startTime} - {slot.endTime}
-                              </div>
-
-                              <div className="mt-1 truncate">
-                                {isSelected
-                                  ? "Selected time is already booked"
-                                  : "Booked appointment"}
-                              </div>
-                            </div>
-                          );
-                        }
+                        const canSelect = Boolean(
+                          slot.selectableStartTime &&
+                            slot.selectableEndTime &&
+                            slot.selectableStartDateTime &&
+                            slot.selectableEndDateTime
+                        );
 
                         return (
-                          <button
+                          <div
                             key={slot.id}
-                            type="button"
-                            onClick={() => setSelectedSlot(slot)}
-                            className={`w-full rounded-xl border px-3 py-2 text-left text-xs transition ${
+                            className={`relative min-h-[86px] overflow-hidden rounded-xl border text-xs ${
                               isSelected
-                                ? "border-emerald-600 bg-emerald-100 text-emerald-950 ring-2 ring-emerald-500"
-                                : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50"
+                                ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-500"
+                                : "border-slate-200 bg-white"
                             }`}
                           >
-                            <div className="font-bold">
-                              {slot.startTime} - {slot.endTime}
-                            </div>
+                            {canSelect ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSelectedSlot({
+                                    ...slot,
+                                    startTime:
+                                      slot.selectableStartTime as string,
+                                    endTime: slot.selectableEndTime as string,
+                                    startDateTime:
+                                      slot.selectableStartDateTime as Date,
+                                    endDateTime:
+                                      slot.selectableEndDateTime as Date,
+                                    isBooked: false,
+                                    bookedAppointment: null,
+                                  })
+                                }
+                                className={`relative z-20 flex h-full min-h-[86px] w-full flex-col justify-end px-3 py-2 text-left transition ${
+                                  isSelected
+                                    ? "text-emerald-950"
+                                    : "text-slate-700 hover:bg-blue-50/60"
+                                }`}
+                              >
+                                <div className="font-bold">
+                                  {slot.startTime} - {slot.endTime}
+                                </div>
 
-                            <div className="mt-1">
-                              {isSelected ? "Selected" : "Available"}
-                            </div>
-                          </button>
+                                <div className="mt-1 font-medium">
+                                  {isSelected
+                                    ? "Selected"
+                                    : `Available from ${slot.selectableStartTime} to ${slot.selectableEndTime}`}
+                                </div>
+                              </button>
+                            ) : (
+                              <div className="relative z-20 flex min-h-[86px] flex-col justify-end px-3 py-2 text-slate-400">
+                                <div className="font-bold">
+                                  {slot.startTime} - {slot.endTime}
+                                </div>
+
+                                <div className="mt-1">No available time</div>
+                              </div>
+                            )}
+
+                            {slot.bookedSegments.map((segment) => (
+                              <div
+                                key={`${slot.id}:${segment.id}:${segment.startTime}:${segment.endTime}`}
+                                className="pointer-events-none absolute left-0 right-0 z-30 border-y border-red-200 bg-red-100 px-3 py-1 text-red-700"
+                                style={{
+                                  top: `${segment.topPercent}%`,
+                                  height: `${segment.heightPercent}%`,
+                                }}
+                              >
+                                <div className="truncate font-bold">
+                                  {segment.startTime} - {segment.endTime}
+                                </div>
+                                <div className="truncate">Booked</div>
+                              </div>
+                            ))}
+                          </div>
                         );
                       })}
                     </div>
