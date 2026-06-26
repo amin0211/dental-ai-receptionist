@@ -291,7 +291,7 @@ export default function DashboardPage() {
           .from("appointment_requests")
           .select("id", { count: "exact", head: true })
           .eq("clinic_id", clinicId)
-          .eq("status", "slot_offered"),
+          .eq("status", "cancelled"),
 
         supabase
           .from("appointments")
@@ -425,13 +425,6 @@ export default function DashboardPage() {
           tone="amber"
         />
 
-        {/* <StatCard
-          title="Slot Offered"
-          value={stats.slotOffered}
-          href="/dashboard/requests?status=slot_offered"
-          isLoading={isLoadingStats}
-          tone="violet"
-        /> */}
 
         <StatCard
           title="Today's Appointments"
@@ -447,6 +440,13 @@ export default function DashboardPage() {
           href="/dashboard/calls?filter=incomplete"
           isLoading={isLoadingStats}
           tone="rose"
+        />
+        <StatCard
+          title="Cancelled Appointments"
+          value={stats.slotOffered}
+          href="/dashboard/requests?status=cancelled"
+          isLoading={isLoadingStats}
+          tone="violet"
         />
       </div>
 
