@@ -425,7 +425,14 @@ export default function DashboardPage() {
           tone="amber"
         />
 
-
+        <StatCard
+          title="Cancelled Appointments"
+          value={stats.slotOffered}
+          href="/dashboard/requests?status=cancelled"
+          isLoading={isLoadingStats}
+          tone="violet"
+        />
+        
         <StatCard
           title="Today's Appointments"
           value={stats.todaysAppointments}
@@ -441,13 +448,7 @@ export default function DashboardPage() {
           isLoading={isLoadingStats}
           tone="rose"
         />
-        <StatCard
-          title="Cancelled Appointments"
-          value={stats.slotOffered}
-          href="/dashboard/requests?status=cancelled"
-          isLoading={isLoadingStats}
-          tone="violet"
-        />
+
       </div>
 
       <section className="mt-6 overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm ring-1 ring-slate-100">

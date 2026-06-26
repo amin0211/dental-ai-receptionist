@@ -675,14 +675,14 @@ async function handleChangeStatus(nextStatus: string) {
                   Needs Follow-up
                 </button>
 
-                <button
+                {/* <button
                   type="button"
                   disabled={isSaving}
                   onClick={() => handleChangeStatus("slot_offered")}
                   className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-800 hover:bg-indigo-100 disabled:opacity-60"
                 >
                   Slot Offered
-                </button>
+                </button> */}
 
                 <button
                   type="button"
