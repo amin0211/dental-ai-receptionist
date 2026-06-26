@@ -401,7 +401,10 @@ async def twilio_realtime(websocket: WebSocket):
 # یک سوال در هر بار بپرس
             core_realtime_instructions = (
                 "You are a concise, warm, and professional AI receptionist for the dental clinic. "
-                "Start the call naturally by greeting the caller, then follow the IMPORTANT PATIENT CONTEXT exactly. "
+                "Start the call naturally by greeting the caller and asking how you can help. "
+                "Do not ask for patient identity at the start of the call. "
+                "Only use IMPORTANT PATIENT CONTEXT when the caller wants to book, check, cancel, or reschedule an appointment. "
+
                 "Start in neutral English unless the caller clearly speaks another language first. "
                 "Reply in the caller's clearly detected language. "
                 "If the caller clearly speaks Persian/Farsi at any point, switch to Persian/Farsi and continue in Persian/Farsi. "
@@ -455,8 +458,10 @@ async def twilio_realtime(websocket: WebSocket):
 # repeat please
 # وقتی صدا نامفهوم
             repeat_and_clarity_instructions = (
+                "Only ask for patient identity when the caller wants to book, check, cancel, or reschedule an appointment. "
                 "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
-                "or when the caller says the request is for someone else, or when the patient identity is not clear. "
+                "or when the caller says the request is for someone else, or when the patient identity is not clear during an appointment-related request. "
+
                 "Use brief natural acknowledgements only when they help the call feel normal, such as: Sure, I can repeat that. "
                 "Do not overuse filler or long status messages. "
                 "If the caller asks to repeat, rephrase, say that again, or asks what you just said, repeat the last meaningful assistant message or the last offered options. "
@@ -720,27 +725,36 @@ async def twilio_realtime(websocket: WebSocket):
 
                             if len(current_patient_candidates) == 1:
                                 patient = current_patient_candidates[0]
+                                patient_name = get_patient_display_name(patient)
+
                                 patient_context = (
                                     " IMPORTANT PATIENT CONTEXT: "
                                     "The caller phone number matches one existing patient. "
-                                    f"Patient option: id={patient.get('id')}, name={patient.get('full_name')}. "
-                                    f"At the start of the call, after greeting, ask: Are you calling for {patient.get('full_name')}? "
+                                    f"Patient option: id={patient.get('id')}, name={patient_name}. "
+
+                                    "Do not ask for patient identity at the start of the call. "
+                                    "First ask how you can help. "
+
+                                    "Only when the caller wants to book a new appointment, check an existing appointment, "
+                                    "cancel an appointment, or reschedule an appointment, ask: "
+                                    f"Is this for {patient_name}? "
 
                                     "This is a yes/no identity confirmation question. "
-                                    "If the caller clearly gives an affirmative answer in the established conversation language, treat this patient as confirmed. "
-                                    "If the caller repeats the suggested patient's name and it clearly refers to this patient, treat it as confirmation. "
-                                    "If the caller clearly gives a negative answer, says a different name, or says the request is for someone else, ask for the patient's full name. "
-                                    "If the caller's answer is not clearly yes and not clearly no, do not continue to booking. "
+                                    "If the caller clearly gives an affirmative answer in the established conversation language, "
+                                    "treat this patient as confirmed and use this patient's id. "
+                                    "If the caller repeats the suggested patient's name and it clearly refers to this patient, "
+                                    "treat it as confirmation. "
+                                    "If the caller clearly gives a negative answer, says a different name, or says the request is for someone else, "
+                                    "ask for the patient's full name. "
+                                    "If the caller's answer is not clearly yes and not clearly no, do not continue to booking, lookup, cancellation, or reschedule. "
                                     "Say that you did not understand, then repeat the same identity confirmation question. "
-                                    "Do not ask for the dental visit reason until the patient identity is confirmed. "
 
-                                    "If the caller asks about an existing appointment, call get_upcoming_appointments with this patient's id. "
-                                    "If the caller asks to cancel an appointment, call get_upcoming_appointments with this patient's id first. "
-                                    "If the caller asks to change or reschedule an appointment, call get_upcoming_appointments with this patient's id first. "
-                                    "If the caller says no or says it is for someone else, ask for the patient's full name. "
+                                    "Do not ask for the dental visit reason until patient identity is confirmed for appointment booking. "
+                                    "Do not call get_upcoming_appointments until patient identity is confirmed. "
+                                    "Do not call cancel_appointment until patient identity and cancellation confirmation are clear. "
+                                    "Do not call reschedule_appointment until patient identity, original appointment, and new slot selection are clear. "
                                     "Do not say or expose the patient id to the caller. "
                                 )
-
                             elif len(current_patient_candidates) == 2:
                                 first_patient = current_patient_candidates[0]
                                 second_patient = current_patient_candidates[1]
@@ -758,17 +772,25 @@ async def twilio_realtime(websocket: WebSocket):
                                     f"First patient option: name={first_name}, id={first_patient.get('id')}. "
                                     f"Second patient option: name={second_name}, id={second_patient.get('id')}. "
                                     f"Internal patient candidates for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
-                                    f"At the start of the call, after greeting, ask exactly: Are you calling for {first_name}? "
+
+                                    "Do not ask for patient identity at the start of the call. "
+                                    "First ask how you can help. "
+
+                                    "Only when the caller wants to book a new appointment, check an existing appointment, "
+                                    "cancel an appointment, or reschedule an appointment, ask exactly: "
+                                    f"Is this for {first_name}? "
+
                                     f"If the caller clearly says yes, use {first_name}'s patient id and treat identity as confirmed. "
-                                    f"If the caller clearly says no, use {second_name}'s patient id and say clearly that you will use {second_name}'s profile. "
+                                    f"If the caller clearly says no, use {second_name}'s patient id and say briefly that you will use {second_name}'s profile. "
                                     "Do not ask the caller to say the second patient's name after they already said no to the first patient. "
                                     "If the caller says it is for someone else, ask for the patient's full name. "
+                                    "If the caller's answer is unclear, do not continue. Repeat the same identity confirmation question. "
+
                                     "If the caller asks about an existing appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id. "
                                     "If the caller asks to cancel an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
                                     "If the caller asks to change or reschedule an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
                                     "Do not say or expose any patient id to the caller. "
                                 )
-
                             elif len(current_patient_candidates) >= 3:
                                 patient_options_for_ai = build_patient_options_for_ai(
                                     current_patient_candidates
@@ -778,16 +800,23 @@ async def twilio_realtime(websocket: WebSocket):
                                     " IMPORTANT PATIENT CONTEXT: "
                                     "The caller phone number matches three or more existing patients, likely a family phone number. "
                                     f"Internal patient candidates for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
-                                    "At the start of the call, after greeting, do not read all patient names. "
-                                    "Ask for the patient's year of birth. "
+
+                                    "Do not ask for patient identity at the start of the call. "
+                                    "First ask how you can help. "
+
+                                    "Only when the caller wants to book a new appointment, check an existing appointment, "
+                                    "cancel an appointment, or reschedule an appointment, ask for the patient's year of birth. "
+
+                                    "Do not read all patient names. "
                                     "Match the birth year only against the provided patient candidates from this phone number. "
                                     "If exactly one candidate matches the birth year, use that patient's id, treat identity as confirmed, "
                                     "and say the patient's name clearly. "
                                     "If no candidate or more than one candidate matches the birth year, ask for the patient's first name or full name. "
-                                    "When matching a spoken name, handle accent, phonetic, and transliteration variations, "
+                                    "When matching a spoken name, handle accent, phonetic, and transliteration variations. "
                                     "Handle cross-language transliteration and phonetic variants of candidate names. "
                                     "Only match against the provided candidates, not the full database. "
                                     "If the caller says it is for someone else, ask for the patient's full name. "
+
                                     "If the caller asks about an existing appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id. "
                                     "If the caller asks to cancel an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
                                     "If the caller asks to change or reschedule an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
@@ -797,10 +826,16 @@ async def twilio_realtime(websocket: WebSocket):
                                 patient_context = (
                                     " IMPORTANT PATIENT CONTEXT: "
                                     "No existing patient was found for this caller phone number. "
-                                    "At the start of the call, after greeting, ask for the patient's full name. "
-                                    "For appointment lookup, cancellation, or reschedule requests, explain that the front desk can help verify the appointment if no existing patient can be confirmed. "
-                                )
 
+                                    "Do not ask for the patient's full name at the start of the call. "
+                                    "First ask how you can help. "
+
+                                    "Only when the caller wants to book a new appointment, check an existing appointment, "
+                                    "cancel an appointment, or reschedule an appointment, ask for the patient's full name. "
+
+                                    "For appointment lookup, cancellation, or reschedule requests, explain that the front desk can help verify the appointment "
+                                    "if no existing patient can be confirmed. "
+                                )
                             clinic_context = (
                                 " IMPORTANT CLINIC NAME CONTEXT: "
                                 f"The clinic name is {current_clinic_name}. "
@@ -1046,37 +1081,10 @@ async def twilio_realtime(websocket: WebSocket):
                             print("Sent OpenAI session.update with clinic, patient context and tools")
                             realtime_session_ready = True
 
-                            if len(current_patient_candidates) == 1:
-                                patient_name = get_patient_display_name(
-                                    current_patient_candidates[0]
-                                )
-                                
-                                initial_response_instructions = (
-                                    "Say exactly and only this sentence, with no extra words: "
-                                    f"Hello, thanks for calling {current_clinic_name}. Are you calling for {patient_name}?"
-                                )
-
-                            elif len(current_patient_candidates) == 2:
-                                first_patient_name = get_patient_display_name(
-                                    current_patient_candidates[0]
-                                )
-
-                                initial_response_instructions = (
-                                    "Say exactly and only this sentence, with no extra words: "
-                                    f"Hello, thanks for calling {current_clinic_name}. Are you calling for {first_patient_name}?"
-                                )
-
-                            elif len(current_patient_candidates) >= 3:
-                                initial_response_instructions = (
-                                    "Say exactly and only this sentence, with no extra words: "
-                                    f"Hello, thanks for calling {current_clinic_name}. What is the patient's year of birth?"
-                                )
-
-                            else:
-                                initial_response_instructions = (
-                                    "Say exactly and only this sentence, with no extra words: "
-                                    f"Hello, thanks for calling {current_clinic_name}. What is the patient's full name?"
-                                )
+                            initial_response_instructions = (
+                                "Say exactly and only this sentence, with no extra words: "
+                                f"Hello, thanks for calling {current_clinic_name}. How can I help?"
+                            )
 
                             await openai_ws.send(
                                 json.dumps(
