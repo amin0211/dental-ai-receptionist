@@ -7,14 +7,27 @@ from supabase import create_client, Client
 
 from config import PUBLIC_WS_URL
 from realtime_routes import router as realtime_router
+from fastapi.middleware.cors import CORSMiddleware
 
 from supabase_service import (
     normalize_phone,
     get_active_doctors_for_clinic,
     get_booking_options_for_ai,
 )
+from faq_audio_routes import router as faq_audio_router
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://YOUR-VERCEL-DASHBOARD-DOMAIN.vercel.app",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(faq_audio_router)
 app.include_router(realtime_router)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")

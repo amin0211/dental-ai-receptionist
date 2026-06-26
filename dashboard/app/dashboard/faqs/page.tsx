@@ -8,6 +8,7 @@ import {
   createClinicFaq,
   deleteClinicFaq,
   getClinicFaqs,
+  regenerateClinicFaqAudio,
   setClinicFaqActive,
   updateClinicFaq,
 } from "@/lib/supabaseService";
@@ -46,12 +47,29 @@ function textToKeywords(text: string) {
     .filter(Boolean);
 }
 
+function getAudioStatusLabel(faq: ClinicFaq) {
+  if (faq.audio_status === "ready") return "Audio ready";
+  if (faq.audio_status === "generating") return "Generating audio";
+  if (faq.audio_status === "failed") return "Audio failed";
+  return "Audio pending";
+}
+
+function getAudioStatusClass(faq: ClinicFaq) {
+  if (faq.audio_status === "ready") return "bg-blue-50 text-blue-700";
+  if (faq.audio_status === "generating") return "bg-amber-50 text-amber-700";
+  if (faq.audio_status === "failed") return "bg-red-50 text-red-700";
+  return "bg-slate-100 text-slate-500";
+}
+
 export default function ClinicFaqsPage() {
   const { clinic } = useClinic();
 
   const [faqs, setFaqs] = useState<ClinicFaq[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [audioGeneratingId, setAudioGeneratingId] = useState<string | null>(
+    null
+  );
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -77,13 +95,14 @@ export default function ClinicFaqsPage() {
     }
   }
 
-    useEffect(() => {
+  useEffect(() => {
     if (clinicId) {
-        loadFaqs();
+      loadFaqs();
     } else {
-        setLoading(false);
+      setLoading(false);
     }
-    }, [clinicId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clinicId]);
 
   const filteredFaqs = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
@@ -127,6 +146,26 @@ export default function ClinicFaqsPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  async function generateAudioInBackground(faqId: string) {
+    if (!clinicId) return;
+
+    setAudioGeneratingId(faqId);
+
+    try {
+      await regenerateClinicFaqAudio({
+        faqId,
+        clinicId,
+      });
+
+      await loadFaqs();
+    } catch (error) {
+      console.error(error);
+      await loadFaqs();
+    } finally {
+      setAudioGeneratingId(null);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -148,6 +187,8 @@ export default function ClinicFaqsPage() {
     setSaving(true);
 
     try {
+      let savedFaqId: string;
+
       if (editingFaqId) {
         await updateClinicFaq({
           id: editingFaqId,
@@ -159,8 +200,10 @@ export default function ClinicFaqsPage() {
           isActive: form.isActive,
           sortOrder: Number(form.sortOrder) || 0,
         });
+
+        savedFaqId = editingFaqId;
       } else {
-        await createClinicFaq({
+        savedFaqId = await createClinicFaq({
           clinicId,
           question: form.question,
           answer: form.answer,
@@ -173,6 +216,8 @@ export default function ClinicFaqsPage() {
 
       resetForm();
       await loadFaqs();
+
+      void generateAudioInBackground(savedFaqId);
     } catch (error) {
       console.error(error);
       alert("Could not save FAQ.");
@@ -184,9 +229,7 @@ export default function ClinicFaqsPage() {
   async function handleDelete(faq: ClinicFaq) {
     if (!clinicId) return;
 
-    const confirmed = window.confirm(
-      `Delete this FAQ?\n\n${faq.question}`
-    );
+    const confirmed = window.confirm(`Delete this FAQ?\n\n${faq.question}`);
 
     if (!confirmed) return;
 
@@ -222,6 +265,12 @@ export default function ClinicFaqsPage() {
       console.error(error);
       alert("Could not update FAQ status.");
     }
+  }
+
+  async function handleRegenerateAudio(faq: ClinicFaq) {
+    if (!clinicId) return;
+
+    void generateAudioInBackground(faq.id);
   }
 
   if (loading) {
@@ -463,83 +512,126 @@ export default function ClinicFaqsPage() {
               </div>
             ) : (
               <div className="space-y-3">
-                {filteredFaqs.map((faq) => (
-                  <article
-                    key={faq.id}
-                    className="rounded-2xl border border-slate-200 p-4"
-                  >
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div className="min-w-0 flex-1">
-                        <div className="mb-2 flex flex-wrap items-center gap-2">
-                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                            {faq.category}
-                          </span>
+                {filteredFaqs.map((faq) => {
+                  const isGeneratingThisAudio = audioGeneratingId === faq.id;
 
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                              faq.is_active
-                                ? "bg-emerald-50 text-emerald-700"
-                                : "bg-slate-100 text-slate-500"
-                            }`}
-                          >
-                            {faq.is_active ? "Active" : "Inactive"}
-                          </span>
+                  return (
+                    <article
+                      key={faq.id}
+                      className="rounded-2xl border border-slate-200 p-4"
+                    >
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="min-w-0 flex-1">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                              {faq.category}
+                            </span>
 
-                          <span className="text-xs text-slate-400">
-                            Order: {faq.sort_order}
-                          </span>
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                                faq.is_active
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "bg-slate-100 text-slate-500"
+                              }`}
+                            >
+                              {faq.is_active ? "Active" : "Inactive"}
+                            </span>
+
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                                isGeneratingThisAudio
+                                  ? "bg-amber-50 text-amber-700"
+                                  : getAudioStatusClass(faq)
+                              }`}
+                            >
+                              {isGeneratingThisAudio
+                                ? "Generating audio"
+                                : getAudioStatusLabel(faq)}
+                            </span>
+
+                            <span className="text-xs text-slate-400">
+                              Order: {faq.sort_order}
+                            </span>
+                          </div>
+
+                          <h3 className="text-sm font-semibold text-slate-900">
+                            {faq.question}
+                          </h3>
+
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">
+                            {faq.answer}
+                          </p>
+
+                          {faq.audio_url && faq.audio_status === "ready" && (
+                            <div className="mt-3">
+                              <audio
+                                controls
+                                src={faq.audio_url}
+                                className="w-full"
+                              />
+                            </div>
+                          )}
+
+                          {faq.audio_status === "failed" && faq.audio_error && (
+                            <p className="mt-2 text-xs text-red-600">
+                              {faq.audio_error}
+                            </p>
+                          )}
+
+                          {faq.keywords?.length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-1.5">
+                              {faq.keywords.map((keyword) => (
+                                <span
+                                  key={keyword}
+                                  className="rounded-full bg-slate-50 px-2 py-1 text-xs text-slate-500"
+                                >
+                                  {keyword}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
 
-                        <h3 className="text-sm font-semibold text-slate-900">
-                          {faq.question}
-                        </h3>
+                        <div className="flex shrink-0 flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleActive(faq)}
+                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700"
+                          >
+                            {faq.is_active ? "Disable" : "Enable"}
+                          </button>
 
-                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">
-                          {faq.answer}
-                        </p>
+                          <button
+                            type="button"
+                            onClick={() => handleRegenerateAudio(faq)}
+                            disabled={audioGeneratingId === faq.id}
+                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {audioGeneratingId === faq.id
+                              ? "Generating..."
+                              : "Regenerate audio"}
+                          </button>
 
-                        {faq.keywords?.length > 0 && (
-                          <div className="mt-3 flex flex-wrap gap-1.5">
-                            {faq.keywords.map((keyword) => (
-                              <span
-                                key={keyword}
-                                className="rounded-full bg-slate-50 px-2 py-1 text-xs text-slate-500"
-                              >
-                                {keyword}
-                              </span>
-                            ))}
-                          </div>
-                        )}
+                          <button
+                            type="button"
+                            onClick={() => startEdit(faq)}
+                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700"
+                          >
+                            Edit
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(faq)}
+                            className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
-
-                      <div className="flex shrink-0 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActive(faq)}
-                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700"
-                        >
-                          {faq.is_active ? "Disable" : "Enable"}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => startEdit(faq)}
-                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700"
-                        >
-                          Edit
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(faq)}
-                          className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
             )}
           </section>

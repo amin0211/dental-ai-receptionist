@@ -1590,6 +1590,8 @@ export async function getPatientByPhone({
   return data as Patient | null;
 }
 
+export type ClinicFaqAudioStatus = "pending" | "generating" | "ready" | "failed";
+
 export type ClinicFaq = {
   id: string;
   clinic_id: string;
@@ -1601,6 +1603,13 @@ export type ClinicFaq = {
   sort_order: number;
   created_at: string;
   updated_at: string;
+
+  audio_url: string | null;
+  audio_storage_path: string | null;
+  audio_hash: string | null;
+  audio_status: ClinicFaqAudioStatus;
+  audio_error: string | null;
+  audio_generated_at: string | null;
 };
 
 export type CreateClinicFaqInput = {
@@ -1624,23 +1633,29 @@ export type UpdateClinicFaqInput = {
   sortOrder: number;
 };
 
+const CLINIC_FAQ_SELECT = `
+  id,
+  clinic_id,
+  question,
+  answer,
+  category,
+  keywords,
+  is_active,
+  sort_order,
+  created_at,
+  updated_at,
+  audio_url,
+  audio_storage_path,
+  audio_hash,
+  audio_status,
+  audio_error,
+  audio_generated_at
+`;
+
 export async function getClinicFaqs(clinicId: string) {
   const { data, error } = await supabase
     .from("clinic_faqs")
-    .select(
-      `
-      id,
-      clinic_id,
-      question,
-      answer,
-      category,
-      keywords,
-      is_active,
-      sort_order,
-      created_at,
-      updated_at
-    `
-    )
+    .select(CLINIC_FAQ_SELECT)
     .eq("clinic_id", clinicId)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: false });
@@ -1655,20 +1670,7 @@ export async function getClinicFaqs(clinicId: string) {
 export async function getActiveClinicFaqs(clinicId: string) {
   const { data, error } = await supabase
     .from("clinic_faqs")
-    .select(
-      `
-      id,
-      clinic_id,
-      question,
-      answer,
-      category,
-      keywords,
-      is_active,
-      sort_order,
-      created_at,
-      updated_at
-    `
-    )
+    .select(CLINIC_FAQ_SELECT)
     .eq("clinic_id", clinicId)
     .eq("is_active", true)
     .order("sort_order", { ascending: true })
@@ -1690,20 +1692,7 @@ export async function getClinicFaqsByCategory({
 }) {
   const { data, error } = await supabase
     .from("clinic_faqs")
-    .select(
-      `
-      id,
-      clinic_id,
-      question,
-      answer,
-      category,
-      keywords,
-      is_active,
-      sort_order,
-      created_at,
-      updated_at
-    `
-    )
+    .select(CLINIC_FAQ_SELECT)
     .eq("clinic_id", clinicId)
     .eq("category", category)
     .eq("is_active", true)
@@ -1728,6 +1717,8 @@ export async function createClinicFaq(input: CreateClinicFaqInput) {
       keywords: input.keywords || [],
       is_active: input.isActive,
       sort_order: input.sortOrder,
+      audio_status: "pending",
+      audio_error: null,
     })
     .select("id")
     .single();
@@ -1754,6 +1745,8 @@ export async function updateClinicFaq(input: UpdateClinicFaqInput) {
       is_active: input.isActive,
       sort_order: input.sortOrder,
       updated_at: new Date().toISOString(),
+      audio_status: "pending",
+      audio_error: null,
     })
     .eq("id", input.id)
     .eq("clinic_id", input.clinicId);
@@ -1823,20 +1816,7 @@ export async function searchClinicFaqs({
 
   const { data, error } = await supabase
     .from("clinic_faqs")
-    .select(
-      `
-      id,
-      clinic_id,
-      question,
-      answer,
-      category,
-      keywords,
-      is_active,
-      sort_order,
-      created_at,
-      updated_at
-    `
-    )
+    .select(CLINIC_FAQ_SELECT)
     .eq("clinic_id", clinicId)
     .eq("is_active", true)
     .or(
@@ -1911,4 +1891,37 @@ export async function findBestClinicFaqAnswer({
   });
 
   return textMatch || null;
+}
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
+
+export async function regenerateClinicFaqAudio({
+  faqId,
+  clinicId,
+}: {
+  faqId: string;
+  clinicId: string;
+}) {
+  if (!API_BASE_URL) {
+    throw new Error("NEXT_PUBLIC_API_BASE_URL is not set.");
+  }
+
+  const response = await fetch(
+    `${API_BASE_URL}/admin/faqs/${faqId}/regenerate-audio`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        clinic_id: clinicId,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "Could not regenerate FAQ audio.");
+  }
+
+  return response.json();
 }
