@@ -701,6 +701,14 @@ async function handleChangeStatus(nextStatus: string) {
                 >
                   Cancel
                 </button>
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => setIsDetailOpen(false)}
+                  className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-800 hover:bg-indigo-100 disabled:opacity-60"
+                >
+                  Close
+                </button>
               </div>
             </div>
           </div>
