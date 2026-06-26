@@ -224,6 +224,10 @@ def build_booking_instructions() -> str:
         "If it is still not possible to tell first or second, ask exactly once: Did you prefer the first option or the second option? "
         "If still unclear after that, say: The front desk will contact you to find the best time. "
         "Never say the request is noted until a clear slot choice is made. "
+        "After saying the request is noted or that the front desk will confirm, the booking flow is complete. "
+        "Do not ask any more slot, date, time, doctor, or confirmation questions after that. "
+        "If the caller speaks again with unclear, random, or unrelated audio after the booking flow is complete, say only: Goodbye. "
+        "If the caller asks a new clear question after the booking flow is complete, answer only that question briefly. "
 
         "FOLLOW-UP RULES: "
         "If no slots are found, say the front desk will contact them to find another time. "
