@@ -1370,7 +1370,7 @@ def get_upcoming_appointments_for_ai(
             display = None
 
             if start_dt:
-                display = f"{doctor_name} on {format_slot_for_ai(start_dt, end_dt or start_dt)}"
+                display = format_slot_for_ai(start_dt, end_dt or start_dt)
 
             formatted_appointments.append(
                 {
@@ -1390,8 +1390,8 @@ def get_upcoming_appointments_for_ai(
             "ok": True,
             "status": "found",
             "message_for_ai": (
-                "Tell the caller the earliest upcoming appointment. "
-                "Say the doctor name, date, and start time only."
+                "Tell the caller the earliest upcoming appointment date and start time only. "
+                "Do not mention the doctor name."
             ),
             "appointments": formatted_appointments,
         }
@@ -2122,10 +2122,10 @@ def get_booking_options_for_ai(
                     "doctor_id": requested_doctor_id,
                     "doctor_name": get_doctor_display_name(requested_doctor),
                 },
-                "eligible_doctors": eligible_names,
                 "message_for_ai": (
-                    "Tell the caller the requested doctor does not provide that treatment, "
-                    "then offer to check another eligible doctor."
+                    "Tell the caller that provider may not be available for this treatment, "
+                    "and offer to check another available provider. "
+                    "Do not mention doctor names."
                 ),
             }
 
@@ -2235,7 +2235,8 @@ def get_booking_options_for_ai(
             all_slots = time_filtered_slots
         else:
             return {
-                "ok": True,
+                "ok": False,
+                "reason": "no_slots_matching_time_preference",
                 "service": {
                     "service_category_id": service_category_id,
                     "service_name": service_match.get("category_name"),
@@ -2252,14 +2253,13 @@ def get_booking_options_for_ai(
                 "preferred_date_raw": preferred_date_raw,
                 "preferred_time_raw": preferred_time_raw,
                 "preferred_date_confirmed": preferred_date_confirmed,
-                "slots": best_slots,
+                "slots": [],
                 "message_for_ai": (
-                    "Offer exactly two options using only slots[0].display and slots[1].display. "
-                    "Do not read starts_at, ends_at, date, start_time, or end_time aloud. "
-                    "Do not say the year unless it appears inside display. "
-                    "Say exactly: Two options: {slot 1 display}, or {slot 2 display}. Which works?"
+                    "Tell the caller no suitable time was found for that preference, "
+                    "and ask if they want another time. Do not mention doctor names."
                 ),
             }
+
     best_slots = all_slots[:2]
 
     if not best_slots:
