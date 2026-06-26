@@ -405,7 +405,7 @@ function CallsPageContent() {
                 <tr>
                   <th className="px-5 py-3 font-semibold text-right">
                     Actions
-                  </th>                  
+                  </th>                
                   <th className="px-5 py-3 font-semibold">Created</th>
                   <th className="px-5 py-3 font-semibold">Patient</th>
                   <th className="px-5 py-3 font-semibold">Phone</th>
@@ -416,12 +416,22 @@ function CallsPageContent() {
                   <th className="px-5 py-3 font-semibold">Confidence</th>
                   <th className="px-5 py-3 font-semibold">Status</th>
                   <th className="px-5 py-3 font-semibold">Missing</th>
+                    
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-slate-100">
                 {calls.map((call) => (
                   <tr key={call.id} className="hover:bg-slate-50">
+                    <td className="px-5 py-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => openReviewModal(call)}
+                        className="font-semibold text-blue-600 hover:text-blue-700"
+                      >
+                        Review
+                      </button>
+                    </td>
                     <td className="whitespace-nowrap px-5 py-4 text-slate-600">
                       {formatDateTime(call.created_at)}
                     </td>
@@ -484,15 +494,7 @@ function CallsPageContent() {
                         : "-"}
                     </td>
 
-                    <td className="px-5 py-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => openReviewModal(call)}
-                        className="font-semibold text-blue-600 hover:text-blue-700"
-                      >
-                        Review
-                      </button>
-                    </td>
+
                   </tr>
                 ))}
               </tbody>
