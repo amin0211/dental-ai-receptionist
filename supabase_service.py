@@ -1053,10 +1053,14 @@ def find_next_available_slots_for_doctor(
             if slot_start <= now_dt:
                 continue
 
+            spoken_display = format_slot_for_ai(slot_start, slot_end)
+
             found_slots.append(
                 {
                     "doctor_id": doctor_id,
                     "clinic_id": clinic_id,
+
+                    # Internal values. AI should not speak these directly.
                     "starts_at": slot_start.isoformat(),
                     "ends_at": slot_end.isoformat(),
                     "date": slot_start.date().isoformat(),
@@ -1064,7 +1068,10 @@ def find_next_available_slots_for_doctor(
                     "end_time": slot_end.strftime("%H:%M"),
                     "duration_minutes": duration_minutes,
                     "timezone": timezone_name,
-                    "display": format_slot_for_ai(slot_start, slot_end),
+
+                    # Spoken value. AI must use this for the caller.
+                    "display": spoken_display,
+                    "spoken_display": spoken_display,
                 }
             )
 
@@ -1090,14 +1097,11 @@ def format_time_for_ai(value: datetime) -> str:
 
 
 def format_slot_for_ai(slot_start: datetime, slot_end: datetime) -> str:
-    day_name = slot_start.strftime("%A")
     month_name = slot_start.strftime("%B")
     day_number = slot_start.day
-
     start_display = format_time_for_ai(slot_start)
 
-    return f"{day_name}, {month_name} {day_number} at {start_display}"
-
+    return f"{month_name} {day_number} at {start_display}"
 
 
 def parse_preferred_date_raw(
@@ -2231,8 +2235,7 @@ def get_booking_options_for_ai(
             all_slots = time_filtered_slots
         else:
             return {
-                "ok": False,
-                "reason": "no_slots_for_time_preference",
+                "ok": True,
                 "service": {
                     "service_category_id": service_category_id,
                     "service_name": service_match.get("category_name"),
@@ -2241,16 +2244,22 @@ def get_booking_options_for_ai(
                     "default_urgency": service_match.get("default_urgency"),
                 },
                 "doctor_filter": doctor_filter,
+                "preferred_date": (
+                    parsed_preferred_date.isoformat()
+                    if parsed_preferred_date
+                    else None
+                ),
                 "preferred_date_raw": preferred_date_raw,
                 "preferred_time_raw": preferred_time_raw,
                 "preferred_date_confirmed": preferred_date_confirmed,
+                "slots": best_slots,
                 "message_for_ai": (
-                    "Tell the caller there are no available times for that time preference, "
-                    "and ask if another time of day works."
+                    "Offer exactly two options using only slots[0].display and slots[1].display. "
+                    "Do not read starts_at, ends_at, date, start_time, or end_time aloud. "
+                    "Do not say the year unless it appears inside display. "
+                    "Say exactly: Two options: {slot 1 display}, or {slot 2 display}. Which works?"
                 ),
-                "slots": [],
             }
-
     best_slots = all_slots[:2]
 
     if not best_slots:
