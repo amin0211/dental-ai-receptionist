@@ -425,13 +425,13 @@ export default function DashboardPage() {
           tone="amber"
         />
 
-        <StatCard
+        {/* <StatCard
           title="Slot Offered"
           value={stats.slotOffered}
           href="/dashboard/requests?status=slot_offered"
           isLoading={isLoadingStats}
           tone="violet"
-        />
+        /> */}
 
         <StatCard
           title="Today's Appointments"
