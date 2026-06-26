@@ -418,7 +418,7 @@ async function handleChangeStatus(nextStatus: string) {
                   <th className="px-5 py-3 font-semibold">Preferred</th>
                   <th className="px-5 py-3 font-semibold">Status</th>
                   <th className="px-5 py-3 font-semibold">Urgency</th>
-                  <th className="px-5 py-3 text-right font-semibold">
+                  <th className="sticky right-0 z-20 bg-slate-50 px-5 py-3 text-right font-semibold shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)]">
                     Actions
                   </th>
                 </tr>
@@ -426,7 +426,7 @@ async function handleChangeStatus(nextStatus: string) {
 
               <tbody className="divide-y divide-slate-100">
                 {requests.map((request) => (
-                  <tr key={request.id} className="hover:bg-slate-50">
+                  <tr key={request.id} className="group hover:bg-slate-50">
                     <td className="whitespace-nowrap px-5 py-4 text-slate-600">
                       {formatDateTime(request.created_at)}
                     </td>
@@ -478,11 +478,11 @@ async function handleChangeStatus(nextStatus: string) {
                       {request.urgency || "-"}
                     </td>
 
-                    <td className="px-5 py-4 text-right">
+                    <td className="sticky right-0 z-10 bg-white px-5 py-4 text-right shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.45)] group-hover:bg-slate-50">
                       <button
                         type="button"
                         onClick={() => openRequestDetail(request)}
-                        className="font-semibold text-blue-600 hover:text-blue-700"
+                        className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
                       >
                         Review
                       </button>
