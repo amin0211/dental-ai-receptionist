@@ -235,7 +235,7 @@ async def extract_appointment_details_with_openai(
                         "Use only information supported by the transcript. "
                         "Do not guess or invent patient names, patient ids, doctor names, dates, times, or reasons. "
                         f"The available doctors for this clinic are: {doctor_list_text}. "
-                        f"Existing patient candidates for the caller phone are: {patient_list_text}. "
+                        # f"Existing patient candidates for the caller phone are: {patient_list_text}. "
                         f"Booking options offered during the call are: {booking_options_text}. "
 
                         "PATIENT IDENTITY RULES: "
