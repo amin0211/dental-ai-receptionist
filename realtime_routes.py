@@ -1,5 +1,6 @@
 import json
 import asyncio
+import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from openai import AsyncOpenAI
@@ -16,7 +17,6 @@ from openai_usage_tracker import (
     persist_call_openai_usage,
     print_usage_summary,
 )
-
 
 from supabase_service import (
     normalize_phone,
@@ -60,7 +60,7 @@ async def extract_appointment_details_with_openai(
             "preferred_doctor_name": None,
             "doctor_confirmed": False,
             "selected_slot_doctor_id": None,
-            "selected_slot_doctor_name": None,            
+            "selected_slot_doctor_name": None,
             "reason": None,
             "preferred_date_raw": None,
             "preferred_time_raw": None,
@@ -85,6 +85,12 @@ async def extract_appointment_details_with_openai(
     )
 
     patient_options = build_patient_options_for_ai(patient_candidates or [])
+
+    patient_list_text = (
+        json.dumps(patient_options, ensure_ascii=False)
+        if patient_options
+        else "No existing patients were found for the caller phone number."
+    )
 
     booking_options_text = (
         json.dumps(booking_options_history or [], ensure_ascii=False)
@@ -146,7 +152,7 @@ async def extract_appointment_details_with_openai(
                     "Use only doctor_name values from the provided booking_options_history. "
                     "Set null if no offered slot was clearly selected."
                 ),
-            },            
+            },
             "reason": {
                 "type": ["string", "null"],
                 "description": "Dental visit reason only if clearly provided or understandable.",
@@ -225,6 +231,8 @@ async def extract_appointment_details_with_openai(
     }
 
     try:
+        extraction_started_at = time.perf_counter()
+
         response = await openai_client.responses.create(
             model=OPENAI_EXTRACTION_MODEL,
             input=[
@@ -235,49 +243,54 @@ async def extract_appointment_details_with_openai(
                         "Use only information supported by the transcript. "
                         "Do not guess or invent patient names, patient ids, doctor names, dates, times, or reasons. "
                         f"The available doctors for this clinic are: {doctor_list_text}. "
-                        # f"Existing patient candidates for the caller phone are: {patient_list_text}. "
+                        f"Existing patient candidates for the caller phone are: {patient_list_text}. "
                         f"Booking options offered during the call are: {booking_options_text}. "
 
                         "PATIENT IDENTITY RULES: "
                         "Use only the provided existing patient candidates. Never invent a patient_id. "
-                        "If exactly one patient candidate was suggested and the caller clearly gave an affirmative answer in the caller's language, "
+                        "If exactly one patient candidate was suggested and the caller clearly gave an affirmative answer, "
                         "set patient_id to that candidate id and patient_identity_confirmed to true. "
                         "If exactly two patient candidates exist and the assistant asked whether the call is for the first patient, "
                         "then a clear yes confirms the first candidate. A clear no means the second candidate should be used and confirmed, "
                         "unless the caller clearly says it is for someone else. "
-                        "If three or more patient candidates exist, the assistant should ask for birth year. "
-                        "If the caller gives a birth year and exactly one provided candidate has that birth_year or date_of_birth year, "
-                        "set patient_id to that candidate id and patient_identity_confirmed to true. "
-                        "If the birth year matches none or multiple candidates, do not choose a patient_id. "
-                        "If the caller selects a patient by name, handle accent, phonetic, and transliteration variations, "
-                        "Handle cross-language transliteration and phonetic variants, such as Persian or other-language pronunciations of English names. "
-                        "Only match names against the provided candidates, not the full database. "
-                        "If the caller rejected the suggested patient, said it is for someone else, or provided a new name that is not one of the candidates, "
+                        "If three or more patient candidates exist, use birth year only if it matches exactly one provided candidate. "
+                        "If the caller selects a patient by name, match only against provided candidates, including phonetic or transliteration variants. "
+                        "If the caller rejected the suggested patient, said it is for someone else, or provided a new name not in candidates, "
                         "set patient_id to null and patient_identity_confirmed to false, but extract patient_name if clearly provided. "
 
+                        "DOCTOR RULES: "
                         "If the caller says a doctor name approximately, phonetically, partially, or in another language, "
                         "match it to the closest available doctor from the provided doctor list. "
                         "If the caller clearly says no preference, set preferred_doctor_name to 'no preference'. "
-                        "If the caller did not clearly choose a doctor and did not say no preference, set preferred_doctor_name to null. "
-                        "For date and time confirmation, mark date_confirmed or time_confirmed true if the assistant repeated that value "
-                        "and the caller clearly agreed directly after that confirmation question. "
-                        "Also mark them true if the assistant offered specific appointment slots and the caller clearly selected one of those slots. "
-                        "Clear affirmative answers in the caller's language count as confirmation. "                        
-                        "Clear negative answers in the caller's language count as rejection. "
+                        "If no doctor was clearly chosen, set preferred_doctor_name to null. "
+
+                        "DATE AND TIME RULES: "
+                        "Mark date_confirmed or time_confirmed true only if the assistant repeated that value and the caller clearly agreed, "
+                        "or if the caller clearly selected a specific offered slot. "
+                        "Clear affirmative answers in the caller's language count as confirmation. "
+                        "Clear negative answers count as rejection. "
                         "If the caller rejected a repeated date or time, do not save the rejected value. "
                         "If the caller corrected a value and then confirmed it, save the corrected value. "
-                        "If the caller selected the first or second offered slot, extract that slot's date and time from the assistant's offered options. "
-                        "If the caller selected the first or second offered slot, also extract selected_slot_doctor_id and selected_slot_doctor_name from booking_options_history. "
-                        "Use the slot order exactly as offered: first means slots[0], second means slots[1]. "
-                        "If the caller selected by repeating an offered date/time, match it to the corresponding offered slot and use that slot's doctor_id and doctor_name. "
-                        "Never infer doctor_id from the transcript. Use only booking_options_history. "
+
+                        "OFFERED SLOT RULES: "
+                        "If the caller clearly selected the first or second offered slot, extract that slot's date and time from the offered options. "
+                        "Also extract selected_slot_doctor_id and selected_slot_doctor_name from booking_options_history. "
+                        "Use slot order exactly as offered: first means slots[0], second means slots[1]. "
+                        "If caller selected by repeating an offered date/time, match it to the corresponding offered slot. "
+                        "Never infer doctor_id from transcript. Use only booking_options_history. "
+
                         "CRITICAL SLOT SELECTION RULE: "
                         "After appointment options are offered, do not treat unclear, garbled, foreign-looking, unrelated, or low-confidence caller audio as a slot selection. "
-                        "Examples of unclear non-selections include random fragments like Энефорстивäгу, background speech, unknown words, or mixed-language noise. "
-                        "The caller selects a slot only if they clearly say first, second, the earlier one, the later one, that one, a specific offered time such as 9 AM or 10 AM, a specific offered date/time, or clearly repeat one of the offered options. "
-                        "If the caller response after slot options is unclear, set preferred_date_raw and preferred_time_raw to null, date_confirmed=false, time_confirmed=false, and explain in notes that no slot was clearly selected. "
+                        "Invalid examples include Tekanwa, Førstebarn, Kjozde, ん, えー, Hallo, hello, yes, okay, mm-hmm, background speech, random fragments, or mixed-language noise. "
+                        "The caller selects a slot only if they clearly say first, first one, option one, second, second one, option two, earlier one, later one, "
+                        "a specific offered time, a specific offered date/time, or clearly repeat one of the offered options. "
+                        "If the caller response after slot options is unclear, set preferred_date_raw and preferred_time_raw to null, "
+                        "date_confirmed=false, time_confirmed=false, selected_slot_doctor_id=null, selected_slot_doctor_name=null, "
+                        "and explain in notes that no slot was clearly selected. "
+
                         "If a value is unclear, garbled, mixed-language, or uncertain, set it to null and explain in notes. "
-                        "For reason, explicit yes/no confirmation is not required if the caller's reason was understandable."
+                        "For reason, explicit yes/no confirmation is not required if the caller's reason was understandable. "
+                        "If the caller wanted an appointment but some fields are missing or unclear, still extract any supported fields and explain missing fields in notes. "
                     ),
                 },
                 {
@@ -295,15 +308,25 @@ async def extract_appointment_details_with_openai(
             },
         )
 
+        extraction_duration = time.perf_counter() - extraction_started_at
+        print(
+            "Appointment extraction completed | "
+            f"duration_seconds={extraction_duration:.3f}"
+        )
+
         return json.loads(response.output_text)
 
     except Exception as e:
+        print(f"Appointment extraction failed: {e}")
+
         return {
             "patient_id": None,
             "patient_identity_confirmed": False,
             "patient_name": None,
             "preferred_doctor_name": None,
             "doctor_confirmed": False,
+            "selected_slot_doctor_id": None,
+            "selected_slot_doctor_name": None,
             "reason": None,
             "preferred_date_raw": None,
             "preferred_time_raw": None,
@@ -355,260 +378,174 @@ async def twilio_realtime(websocket: WebSocket):
             },
         ) as openai_ws:
             print("Connected to OpenAI Realtime")
+
             short_audio_response_instructions = (
                 "Reply in the caller's current language. "
-                "Be extremely brief. "
-                "Maximum 12 words for normal answers. "
-                "Maximum 20 words for appointment slot options. "
-                "Do not explain. "
-                "Do not add extra context. "
-                "Do not say okay, sure, absolutely, thank you, let me check, or I found for you unless necessary. "
-                "Ask only one direct question. "
-                "For appointment slots, use exactly this style: "
+                "Be brief and natural. "
+                "Ask only one question at a time. "
+                "Do not explain your process. "
+                "Do not say okay, sure, thank you, one moment, let me check, or I will check before using a tool. "
+                "When a tool is needed, call the tool silently first, then answer with the result. "
+                "For appointment slots, always say exactly: "
                 "'Two options: [date] at [time], or [date] at [time]. Which works?' "
-                "For FAQ answers, answer in one short sentence only. "
+                "Always include the full date and time for both options. "
+                "Never shorten the second option to only the time. "
+                "Do not mention doctor names or end times in new appointment slot suggestions. "
+                "Never say an appointment is confirmed. "
+                "For FAQ answers, use one short sentence. "
                 "For working hours, answer with only the day and hours. "
-                "For appointment lookup, say only date and start time. "
                 "For cancellation success, say only: 'Your appointment is cancelled.' "
                 "For reschedule success, say only: 'Your request is noted. The front desk will confirm.' "
-                "Do not mention doctor names in new appointment slot suggestions. "
-                "Do not mention appointment end times. "
-                "Never say the appointment is confirmed. "
             )
 
             voice_cost_control_instructions = (
-                "VOICE COST CONTROL: "
-                "All spoken replies must be very short. "
+                "VOICE RULES: "
+                "Keep spoken replies short. "
                 "Default to one short sentence. "
-                "Maximum 12 words unless giving two appointment options. "
-                "Do not explain your process. "
                 "Do not summarize unless asked. "
-                "Do not repeat known information unless asked. "
+                "Do not repeat known information unless needed. "
                 "Do not use filler acknowledgements. "
-                "When asking a question, ask only the question. "
-                "When offering appointment slots, say only the date and start time. "
-                "Do not say doctor names for new appointment slot suggestions. "
-                "Do not say appointment end times. "
-                "If a longer answer seems useful, still keep it under one sentence. "
+                "When asking a question, ask only that question. "
+                "When using tools, do not speak a status sentence first. "
+                "Call the tool silently, then answer with the result only. "
             )
 
-# تو AI receptionist دندانپزشکی هستی
-# مودب و حرفه‌ای باش
-# اول تماس greeting بده
-# زبان caller را تشخیص بده
-# اگر فارسی صحبت کرد فارسی جواب بده
-# اگر صدا نامفهوم بود حدس نزن
-# یک سوال در هر بار بپرس
             core_realtime_instructions = (
-                "You are a concise, warm, and professional AI receptionist for the dental clinic. "
-                "Start the call naturally by greeting the caller and asking how you can help. "
+                "You are a concise, warm, professional AI receptionist for the dental clinic. "
+                "Start by greeting the caller and asking how you can help. "
                 "Do not ask for patient identity at the start of the call. "
-                "Only use IMPORTANT PATIENT CONTEXT when the caller wants to book, check, cancel, or reschedule an appointment. "
-
-                "Start in neutral English unless the caller clearly speaks another language first. "
+                "Ask for patient identity only when the caller wants to book, check, cancel, or reschedule an appointment. "
+                "Start in English unless the caller clearly speaks another language first. "
                 "Reply in the caller's clearly detected language. "
-                "If the caller clearly speaks Persian/Farsi at any point, switch to Persian/Farsi and continue in Persian/Farsi. "
-                "If the caller clearly asks to use another language, switch to that language. "
-                "If the caller's speech is mixed, garbled, or unclear, do not switch languages based on that unclear fragment. "
-                "When speech is unclear, stay in the last clearly established language and ask the caller to repeat clearly. "
-                "Do not switch languages because of one random foreign-looking transcript fragment. "
-                "Keep replies short, natural, and receptionist-like. "
-                "Normally ask exactly one question at a time. "
-                "Do not ask for more than one new field in the same reply. "
+                "If the caller clearly speaks Persian/Farsi, switch to Persian/Farsi. "
+                "Do not switch languages because of unclear, random, or foreign-looking transcript fragments. "
+                "If speech is unclear, stay in the last clear language and ask the same pending question again. "
+                "Ask one question at a time. "
+                "Never confirm an appointment as booked. "
             )
 
-# سوالات عمومی کلینیک 
             faq_realtime_instructions = (
                 "FAQ HANDLING: "
-                "The caller may ask general clinic questions that are not appointment booking requests. "
-                "Examples include: Do you accept insurance, do you offer direct billing, do you have parking, "
-                "do you accept children, do you offer emergency appointments, do you do wisdom tooth removal, "
-                "what services do you provide, what is your cancellation policy, or similar clinic policy questions. "
-                "When the caller asks a general clinic question, call the get_faq_answer tool with the caller's exact question. "
-                "If get_faq_answer returns ok=true and faq.answer exists, answer using only that FAQ answer. "
-                "Keep the answer short, natural, and receptionist-like. "
-                "Do not invent clinic policies, prices, insurance coverage, treatment guarantees, parking details, or availability details. "
-                "If the FAQ answer says something depends on insurance plan, availability, provider, patient condition, or dentist assessment, "
-                "tell the caller the front desk can verify it. "
-                "If get_faq_answer returns ok=false, say you are not fully sure about that specific question and offer to have the front desk follow up. "
-                "Do not answer clinic FAQ questions from general knowledge. Always use clinic-specific FAQ data when available. "
-                "If the FAQ question turns into booking, for example the caller asks about wisdom tooth and then wants an appointment, "
-                "answer the FAQ first, then continue the normal booking flow by asking for the dental visit reason or using the stated reason. "
-                "For emergency-related FAQ, do not diagnose and do not promise treatment. "
-                "If the caller mentions severe swelling, trouble breathing, uncontrolled bleeding, fever, facial trauma, or serious injury, "
-                "advise them to call 911 or go to the nearest emergency room, and if collecting appointment information mark the request as urgent. "
+                "For general clinic questions such as insurance, direct billing, parking, children, services, emergency availability, wisdom teeth, cancellation policy, or payment policy, call get_faq_answer. "
+                "Answer only from the FAQ tool result. "
+                "Do not invent clinic policies, prices, coverage, parking, availability, or treatment guarantees. "
+                "If FAQ lookup fails, say the front desk can follow up. "
+                "If the caller then wants to book, continue booking flow. "
+                "For severe swelling, trouble breathing, uncontrolled bleeding, fever, facial trauma, or serious injury, advise emergency care or 911. "
             )
 
-# ساعت کاری 
             working_hours_realtime_instructions = (
                 "WORKING HOURS HANDLING: "
-                "If the caller asks about clinic hours, opening hours, closing time, whether the clinic is open, "
-                "or a specific doctor's working hours, call the get_working_hours tool. "
-                "Examples include: What are your hours, are you open today, what time do you close, "
-                "is Dr. Smith working on Monday, clinic hours, doctor hours, opening hours, closing hours. "
-                "Use get_working_hours instead of get_faq_answer for working-hours questions. "
-                "If the caller asks about a specific doctor, pass the doctor name. "
-                "If the caller mentions a specific day or date, pass it as date_raw. "
-                "If the caller asks general hours without a date, pass date_raw as null. "
-                "Answer only using the tool result. Do not invent hours. "
-                "If the tool says no hours were found, say the front desk can verify the hours. "
-                "Do not treat a working-hours question as an appointment booking request unless the caller clearly says they want to book, schedule, change, or cancel an appointment. "
+                "For clinic hours, opening hours, closing time, open today/tomorrow, or doctor working hours, call get_working_hours. "
+                "Use get_working_hours instead of FAQ for hours questions. "
+                "Pass doctor_name only if a specific doctor is mentioned. "
+                "Pass date_raw only if a day or date is mentioned. "
+                "Answer only using the tool result. "
+                "Do not treat hours questions as booking unless the caller clearly asks to book, schedule, change, cancel, or check an appointment. "
             )
 
-# repeat please
-# وقتی صدا نامفهوم
             repeat_and_clarity_instructions = (
-                "Only ask for patient identity when the caller wants to book, check, cancel, or reschedule an appointment. "
-                "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
-                "or when the caller says the request is for someone else, or when the patient identity is not clear during an appointment-related request. "
-
-                "Use brief natural acknowledgements only when they help the call feel normal, such as: Sure, I can repeat that. "
-                "Do not overuse filler or long status messages. "
-                "If the caller asks to repeat, rephrase, say that again, or asks what you just said, repeat the last meaningful assistant message or the last offered options. "
-                "Do not treat repeat, rephrase, say that again, what did you say, or can you repeat as a date, time, doctor, reason, yes, no, appointment lookup, cancellation, reschedule, or slot choice. "
-                "After repeating or rephrasing, ask the same pending question again. "
+                "CLARITY AND REPEAT RULES: "
+                "Only ask for patient identity for appointment-related requests. "
+                "Only ask for full name if no existing patient was found, the caller says it is for someone else, or identity is unclear during an appointment-related request. "
+                "If the caller asks to repeat, rephrase, or says what did you say, repeat the last meaningful question or slot options. "
+                "Do not treat repeat requests as date, time, doctor, reason, yes, no, cancellation, reschedule, or slot choice. "
+                "After repeating, ask the same pending question again. "
             )
 
-# وقت‌های موجود بیمار 
             appointment_lookup_instructions = (
-                "If the caller asks about an existing appointment, appointment time, appointment reminder, upcoming appointment, "
-                "or says phrases like when is my appointment, what time is my appointment, remind me of my appointment, or the equivalent in the caller's language, do not call get_booking_options. "
-                "First make sure the patient identity is clear and confirmed. "
-                "If one existing patient matches the phone number, ask if the call is for that patient. If yes, use that patient's id. "
-                "If multiple patients match the phone number, follow the patient identity flow from IMPORTANT PATIENT CONTEXT. "
-                "For two patients, confirm the first patient; if the caller says no, use the second patient and say that patient's name clearly. "
-                "For three or more patients, ask for the patient's year of birth and match it only against the phone-number patient candidates. "
-                "After the caller selects or confirms one patient, use that patient's id. "
-
-                "If no existing patient is found or the patient is not confirmed, ask for the patient's full name and say the front desk can help verify the appointment. "
-                "Only call get_upcoming_appointments when you have a confirmed existing patient_id. "
-                "When appointment lookup returns appointments, tell the caller the earliest upcoming appointment with doctor name, date, and start time only. "
-                "If multiple upcoming appointments are returned and the caller asks generally about their appointment time, tell the earliest one first. "
-                "Do not create a new appointment request when the caller only asks to check or remind an existing appointment. "
-                "If no upcoming appointment is found, say you cannot find an upcoming appointment and the front desk can help. "
+                "APPOINTMENT LOOKUP: "
+                "If the caller asks about an existing appointment, appointment time, reminder, or upcoming appointment, do not call get_booking_options. "
+                "First confirm patient identity using IMPORTANT PATIENT CONTEXT. "
+                "Only call get_upcoming_appointments after you have a confirmed existing patient_id. "
+                "If appointments are found, tell the earliest appointment with doctor name, date, and start time only. "
+                "If none are found, say you could not find an upcoming appointment and the front desk can help. "
+                "Do not create a new appointment request for lookup-only calls. "
             )
 
-#  برای cancel کردن وقت
             cancellation_instructions = (
-                "If the caller asks to cancel an existing appointment, do not call get_booking_options. "
-                "First confirm the patient identity. Then call get_upcoming_appointments for the confirmed patient. "
-                "If exactly one upcoming appointment is available, repeat that appointment with doctor name, date, and start time, then ask for final yes/no confirmation before cancelling. "
-                "If multiple upcoming appointments are available, list them as first, second, third with doctor name, date, and start time, then ask which one they want to cancel. "
-                "After the caller chooses an appointment to cancel, repeat the exact appointment and ask for final yes/no confirmation. "
-                "Only call cancel_appointment after the caller clearly confirms yes to cancelling that exact appointment. "
-                "Never cancel an appointment based on unclear audio, background speech, maybe, or ambiguous yes. "
-                "After cancel_appointment succeeds, tell the caller the appointment has been cancelled. "
-                "If cancel_appointment fails, tell the caller the front desk can help cancel it. "
+                "CANCELLATION: "
+                "If the caller wants to cancel an existing appointment, do not call get_booking_options. "
+                "First confirm patient identity, then call get_upcoming_appointments. "
+                "If one appointment exists, repeat doctor name, date, and start time, then ask for final yes/no confirmation. "
+                "If multiple appointments exist, list them as first, second, third, then ask which one. "
+                "Only call cancel_appointment after the caller clearly confirms cancelling that exact appointment. "
+                "Never cancel based on unclear audio, background speech, maybe, or ambiguous yes. "
             )
 
-# می‌خوام وقتمو عوض کنم
             reschedule_instructions = (
-                "If the caller asks to change, move, modify, or reschedule an existing appointment, do not call get_booking_options first. "
-                "First confirm the patient identity. Then call get_upcoming_appointments for the confirmed patient. "
-                "If exactly one upcoming appointment is available, repeat that appointment with doctor name, date, and start time, then ask what date they prefer instead. "
-                "If multiple upcoming appointments are available, list them as first, second, third with doctor name, date, and start time, then ask which appointment they want to change. "
-                "After the caller chooses which appointment to change, ask what date they prefer instead. "
-                "When the caller gives a new date for rescheduling, repeat only that date and ask if it is correct. "
-                "After the new date is confirmed, call get_booking_options using the original appointment reason or service if available, the original doctor if available, and the confirmed new date. "
-                "Offer exactly two new slot suggestions when available. "
-                "After the caller clearly selects one new slot, call reschedule_appointment with the original appointment id, confirmed patient id, selected slot doctor_id, starts_at, and ends_at. "
-                "Only reschedule after the caller clearly selects one new offered slot. "
-                "Never reschedule based on unclear audio, background speech, maybe, or ambiguous yes. "
-                "After reschedule_appointment succeeds, tell the caller the previous appointment has been cancelled and the new appointment request has been noted. "
+                "RESCHEDULE: "
+                "If the caller wants to change, move, or reschedule an existing appointment, do not call get_booking_options first. "
+                "First confirm patient identity, then call get_upcoming_appointments. "
+                "If one appointment exists, repeat doctor name, date, and start time, then ask what date they prefer. "
+                "If multiple appointments exist, list them as first, second, third, then ask which appointment to change. "
+                "After the caller gives a new date, repeat the date and ask if correct. "
+                "After date confirmation, call get_booking_options using the original reason/service and original doctor if available. "
+                "Offer two new slots. "
+                "Only call reschedule_appointment after the caller clearly selects one offered new slot. "
                 "Never say the new appointment is confirmed. "
-                "Say the front desk will contact them to confirm. "
-                "If reschedule_appointment fails, tell the caller the front desk can help reschedule it. "
             )
 
-# اول patient identity
-# بعد reason
-# اگر reason واضح بود get_booking_options
-# اگر تاریخ داد، تاریخ را confirm کن
-# بعد دو slot پیشنهاد بده
-# اسم دکتر نگو
-# end time نگو
-# فقط date و start time بگو
             booking_instructions = (
-                "For appointment booking, do not force the caller to choose a doctor first. "
-                "If the caller already mentions a doctor, remember that doctor preference. "
-                "If the caller does not mention a doctor, ask the reason for the dental visit after patient identity has been handled. "
-                "For reason, ask only why they want the dental visit. "
-                "If the reason is specific enough to map to a dental service or symptom, accept it. "
-                "If the caller only says a vague reason such as problem, issue, something is wrong, I need a dentist, or I have a concern, ask one follow-up question to clarify the dental problem before calling get_booking_options. "
-                "Examples of specific enough reasons: tooth pain, cleaning, checkup, broken tooth, filling, crown, wisdom tooth, bleeding gums, swelling, emergency, or orthodontic concern. "
-                "Do not call get_booking_options when the only reason is vague. "
-                "Do not ask for confirmation of the reason unless it is unclear. "
-                "If the reason is unclear, ask why they want the dental visit again. "
-                "After the dental reason is clear, use the get_booking_options tool to find appointment options. "
-                "The booking tool uses the treatment duration, eligible doctors, recurring doctor availability, and calendar events from the clinic database. "
-                "If the caller already mentioned a doctor, include that doctor name in the tool call. "
-                "If the caller did not mention a doctor, pass doctor_name as null. "
-                "If the caller gives a preferred date, repeat only the understood date and ask if it is correct before using that date for slot search. "
-                "Never introduce a date that was not clearly spoken by the caller or returned by the booking tool. "
-                "Never ask whether a random date is correct. "
-                "If the caller asks for repetition after slot options, repeat the same slot options exactly; do not ask for date confirmation. "
-                "If no date is currently pending confirmation, do not ask 'Is [date] correct?'. "
-                "Only confirm a date immediately after the caller clearly gave that date. "
-                "The date is not collected until the caller clearly confirms it after you repeat it. "
-                "When asking a yes/no confirmation question, the caller's answer must clearly mean yes or no in the established conversation language. "
-                "If the answer is not clearly yes and not clearly no, do not advance the flow. "
-                "Say that you did not understand, then repeat the same yes/no question. "
-                "Do not treat unrelated words, names, foreign-language fragments, background speech, or unclear audio as yes or no. "
+                "BOOKING FLOW: "
+                "For new appointment booking, first confirm patient identity using IMPORTANT PATIENT CONTEXT. "
+                "Do not force the caller to choose a doctor. "
+                "If the caller mentions a doctor, keep it as doctor_name. "
+                "After identity is handled, ask for the dental visit reason. "
 
-                "If the caller says no, no matter the language, the date is rejected and not confirmed. "
-                "If the caller says no and provides a corrected date, discard the old date, repeat only the corrected date, and ask if it is correct. "
-                "If the caller says no without a clear correction, discard the old date and ask for the preferred date again. "
-                "If no preferred date is given, search for the earliest available slots. "
+                "REASON RULES: "
+                "Accept specific reasons such as tooth pain, cleaning, checkup, broken tooth, filling, crown, wisdom tooth, bleeding gums, swelling, emergency, or orthodontic concern. "
+                "If the reason is vague, such as problem, issue, concern, or I need a dentist, ask one follow-up question to clarify. "
+                "Do not call get_booking_options for a vague reason only. "
+                "Do not ask to confirm the reason unless unclear. "
 
-                "Do not ask for a preferred time before using the booking tool, but if the caller gives a time preference, keep it. "
-                "If the caller says a time preference such as morning, afternoon, evening, after 2 PM, before noon, or a specific time, keep that as preferred_time_raw. "
-                "If the caller gives a time range such as between 2 and 4, from 3 to 5, or the equivalent in the caller's language, keep the full range as preferred_time_raw. "
-                "If the caller says both a different date and time preference, confirm both together, for example: 'Tomorrow afternoon, correct?' "
-                "After the caller confirms the date and time preference, call get_booking_options with preferred_date_raw and preferred_time_raw. "
-                "Never ignore morning, afternoon, evening, after, before, between, from-to, or specific time preferences. "
-                "If the caller requested afternoon, do not offer morning slots. "
+                "DATE AND TIME RULES: "
+                "If the caller gives a preferred date, repeat only that date and ask if correct before using it. "
+                "Only use a preferred date after the caller clearly confirms it. "
+                "If the caller says no, discard the date and ask for the preferred date again unless they give a corrected date. "
+                "If the caller gives a time preference such as morning, afternoon, evening, after 2 PM, before noon, or a range, keep it as preferred_time_raw. "
+                "If the caller confirms a date plus time preference, call get_booking_options with both. "
+                "If no date is given, call get_booking_options for earliest available slots. "
+                "If the caller changes only time preference after a date was already confirmed, keep the same date and call get_booking_options with the new time preference. "
 
-                "The preferred time should normally come from one of the suggested appointment slots. "
-                "Even if the selected slot contains doctor_name internally, never include doctor_name in the spoken slot suggestion. "
-                "If the caller requested a specific doctor, search only that doctor internally, but still offer only the date and time to the caller. "
-                "If the caller did not request a specific doctor, search eligible doctors internally, but still offer only the date and time to the caller. "
-                "Do not say the appointment end time to the caller. "
-                "Keep the doctor_id internally from the selected slot, but do not mention the doctor's name to the caller. "
-                "Keep AM or PM when saying times, because 11 AM and 11 PM are different. "
-                "Ask which one works better. "
-                "After slot suggestions are given, classify the caller's next answer as one of: select_suggested_slot, change_doctor, change_date, change_doctor_and_date, reject_without_alternative, ask_question, unclear. "
-                "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
-                "Only treat the caller as selecting a suggested slot if they clearly say the time, the first one, the second one, the earlier one, the later one, that one, or clearly repeat one of the offered options. "
-                "Do not infer slot selection from unrelated words, names, greetings, foreign-language fragments, background speech, or unclear audio. "
-                "If the answer after slot suggestions is unclear, garbled, unrelated, foreign-looking, or low-confidence, do not treat it as slot selection. "
-                "Ask exactly: Did you prefer the first option or the second option? "
-                "Never say the request has been noted after unclear audio. "
-                "Never say the front desk will confirm until the caller clearly chooses the first option, second option, or repeats one offered date/time. "
-                "Do not say the request has been noted until the caller clearly chooses one suggested slot or clearly asks for front desk follow-up. "
+                "TOOL RULES: "
+                "Call get_booking_options silently. Do not say let me check or I will check before the tool. "
+                "Pass doctor_name if requested, otherwise null. "
+                "Pass preferred_date_confirmed true only after the caller confirmed the date. "
+                "Use returned slots only. Do not invent dates or times. "
+
+                "SLOT OFFER RULES: "
+                "Offer exactly two slots when available. "
+                "Say exactly: Two options: [date] at [time], or [date] at [time]. Which works? "
+                "Always include the full date and time for both options. "
+                "Do not mention doctor names or end times. "
+
+                "SLOT SELECTION RULES: "
+                "After offering slots, the caller must clearly choose one option before you say the request is noted. "
+                "Valid slot choices are only: first, first one, option one, second, second one, option two, earlier one, later one, a clearly repeated offered time, or a clearly repeated offered date/time. "
+                "Yes, okay, mm-hmm, greetings, names, random sounds, foreign-looking transcripts, and unclear words are not valid slot choices. "
+                "Examples of invalid slot choices: Tekanwa, Førstebarn, Kjozde, ん, えー, Hallo, hello, yes, okay, background speech. "
+                "If the answer after slot options is not a valid slot choice, ask exactly once: Did you prefer the first option or the second option? "
+                "If still unclear after that, say: The front desk will contact you to find the best time. "
+                "Never say the request is noted until a clear slot choice is made. "
                 "Never say the appointment is confirmed. "
-                "When re-offering slots after a doctor change, do not mention the doctor's name in the slot suggestions. "
-                "If the caller says a different date after suggestions, confirm that date first, then call get_booking_options again with the updated date. "
-                "If the caller says both a different doctor and a different date, update both, confirm the date, then call get_booking_options again. "
-                "If the caller rejects the suggested slots without giving a new doctor or date, ask what date they prefer. "
-                "If the caller still does not choose a slot after you ask one follow-up question, say the front desk will contact them to find another time. "
-                "If the booking tool says the requested doctor does not provide the treatment, tell the caller that briefly and offer to check another eligible doctor. "
-                "If the booking tool says no slots were found, tell the caller the front desk will contact them to find another time. "
-                "If the booking tool says the service was not matched, ask the caller to briefly repeat the reason for the dental visit. "
+
+                "FOLLOW-UP RULES: "
+                "If no slots are found, say the front desk will contact them to find another time. "
+                "If the requested doctor does not provide the treatment, say that briefly and offer another eligible doctor. "
+                "If service is not matched, ask the caller to repeat the dental reason briefly. "
+                "Handle only one new appointment request per call. "
+                "If the caller asks for multiple appointments, handle the first and say the front desk will help with the others. "
             )
 
-# اگر caller چیزی گفت که واضح نبود، حدس نزن.
-# از روی صدای خراب تاریخ یا ساعت نساز.
-# اگر severe swelling، trouble breathing، uncontrolled bleeding، facial trauma گفت،
-# به emergency room یا 911 راهنمایی کن.؟
             unclear_audio_and_safety_instructions = (
-                "If the caller's answer is garbled, mixed-language, unrelated, or low-confidence, do not convert it into a name, date, time, doctor, reason, appointment id, cancellation, reschedule, or slot choice. "
-                "Ask the same field again in the last clearly established language. "
-                "Never turn unclear audio into a likely date such as next Tuesday, next Monday, April 22, April 15, or a likely time such as 3 PM or 9:30 AM. "
-                "Random words, foreign-language fragments, unrelated words, or unclear sounds are not confirmation. "
-                "Only clear yes/no answers in the established conversation language count as confirmation or rejection. "
-                "If the pending question expects yes/no and the caller's answer is not clearly yes or no, repeat the same question instead of advancing. "
-
-                "Do not say the request has been noted until the caller has selected one of the suggested appointment slots, or until the caller agrees that the front desk should follow up. "
+                "UNCLEAR AUDIO SAFETY: "
+                "Do not convert garbled, mixed-language, unrelated, or low-confidence speech into a name, date, time, doctor, reason, appointment id, cancellation, reschedule, or slot choice. "
+                "Ask the same pending question again in the last clear language. "
+                "Do not turn unclear audio into likely dates or times. "
+                "Only clear yes/no answers count for yes/no questions. "
+                "For slot selection, unclear audio is not first or second. "
+                "If slot selection is unclear, ask once: Did you prefer the first option or the second option? "
                 "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately. "
             )
 
@@ -670,7 +607,6 @@ async def twilio_realtime(websocket: WebSocket):
                             print(f"Resolved clinic | id={current_clinic_id} name={current_clinic_name}")
 
                             current_doctors = get_active_doctors_for_clinic(clinic_id)
-
                             print(f"Active doctors for clinic: {current_doctors}")
 
                             current_patient_candidates = find_patients_by_phone(
@@ -691,36 +627,18 @@ async def twilio_realtime(websocket: WebSocket):
                                 doctor_context = (
                                     " IMPORTANT CLINIC CONTEXT: "
                                     f"This clinic has multiple active doctors: {', '.join(doctor_names)}. "
-                                    "Do not force the caller to choose a doctor first. "
-                                    "If the caller mentions a doctor at any point, treat it as preferred_doctor_name and use that doctor for booking search. "
-                                    "If the caller does not mention a doctor, ask the reason for the dental visit after patient identity has been handled. "
-                                    "After the reason is clear, call the get_booking_options tool. "
-                                    "If no doctor was requested, the tool will find eligible doctors for that treatment. "
-                                    "If a doctor was requested, the tool will check that doctor and treatment combination. "
-                                    "If the caller gives a preferred date, confirm the date before calling the tool with that date. "
-                                    "After slot suggestions are given, if the caller says a different doctor or different date, call the tool again with the updated preference. "
-                                    "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
-                                    "If the caller rejects the suggested slots without a new doctor or date, ask what date they prefer. "
-                                    "If the caller still does not choose a slot after you ask one follow-up question, say the front desk will contact them to find another time. "
-                                    "Ask only one direct question at a time. "
-                                    "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
-                                    "or when the caller says the request is for someone else, or when the patient identity is not clear. "
+                                    "Do not force the caller to choose a doctor. "
+                                    "If the caller mentions a doctor, keep that doctor preference for booking search. "
+                                    "If no doctor is mentioned, use eligible doctors internally. "
+                                    "Never mention doctor names in new appointment slot suggestions. "
                                 )
                             else:
                                 doctor_context = (
                                     " IMPORTANT CLINIC CONTEXT: "
                                     "This clinic has zero or one active doctor. "
                                     "Do not ask which doctor the caller prefers. "
-                                    "Ask the reason for the dental visit after patient identity has been handled. "
-                                    "After the reason is clear, call the get_booking_options tool to suggest appointment slots. "
-                                    "If the caller gives a preferred date, confirm the date before calling the tool with that date. "
-                                    "After slot suggestions are given, if the caller says a different date, call the tool again with the updated date. "
-                                    "If the caller selects one of the suggested slots, accept the selection and say the request has been noted and the front desk will contact them to confirm. "
-                                    "If the caller rejects the suggested slots without a new date, ask what date they prefer. "
-                                    "If the caller still does not choose a slot after you ask one follow-up question, say the front desk will contact them to find another time. "
-                                    "Ask only one direct question at a time. "
-                                    "Only ask for the patient's full name when no existing patient was found for the caller phone number, "
-                                    "or when the caller says the request is for someone else, or when the patient identity is not clear. "
+                                    "Use the available doctor internally for booking search when possible. "
+                                    "Never mention doctor names in new appointment slot suggestions. "
                                 )
 
                             if len(current_patient_candidates) == 1:
@@ -731,30 +649,17 @@ async def twilio_realtime(websocket: WebSocket):
                                     " IMPORTANT PATIENT CONTEXT: "
                                     "The caller phone number matches one existing patient. "
                                     f"Patient option: id={patient.get('id')}, name={patient_name}. "
-
                                     "Do not ask for patient identity at the start of the call. "
-                                    "First ask how you can help. "
-
-                                    "Only when the caller wants to book a new appointment, check an existing appointment, "
-                                    "cancel an appointment, or reschedule an appointment, ask: "
+                                    "Only when the caller wants to book, check, cancel, or reschedule an appointment, ask: "
                                     f"Is this for {patient_name}? "
-
-                                    "This is a yes/no identity confirmation question. "
-                                    "If the caller clearly gives an affirmative answer in the established conversation language, "
-                                    "treat this patient as confirmed and use this patient's id. "
-                                    "If the caller repeats the suggested patient's name and it clearly refers to this patient, "
-                                    "treat it as confirmation. "
-                                    "If the caller clearly gives a negative answer, says a different name, or says the request is for someone else, "
-                                    "ask for the patient's full name. "
-                                    "If the caller's answer is not clearly yes and not clearly no, do not continue to booking, lookup, cancellation, or reschedule. "
-                                    "Say that you did not understand, then repeat the same identity confirmation question. "
-
-                                    "Do not ask for the dental visit reason until patient identity is confirmed for appointment booking. "
-                                    "Do not call get_upcoming_appointments until patient identity is confirmed. "
-                                    "Do not call cancel_appointment until patient identity and cancellation confirmation are clear. "
-                                    "Do not call reschedule_appointment until patient identity, original appointment, and new slot selection are clear. "
+                                    "If the caller clearly says yes, use this patient's id and treat identity as confirmed. "
+                                    "If the caller repeats the suggested patient's name and it clearly refers to this patient, treat it as confirmation. "
+                                    "If the caller clearly says no, says a different name, or says it is for someone else, ask for the patient's full name. "
+                                    "If the caller's answer is unclear, repeat the same identity confirmation question. "
+                                    "Do not ask for the dental visit reason until patient identity is confirmed for booking. "
                                     "Do not say or expose the patient id to the caller. "
                                 )
+
                             elif len(current_patient_candidates) == 2:
                                 first_patient = current_patient_candidates[0]
                                 second_patient = current_patient_candidates[1]
@@ -772,25 +677,17 @@ async def twilio_realtime(websocket: WebSocket):
                                     f"First patient option: name={first_name}, id={first_patient.get('id')}. "
                                     f"Second patient option: name={second_name}, id={second_patient.get('id')}. "
                                     f"Internal patient candidates for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
-
                                     "Do not ask for patient identity at the start of the call. "
-                                    "First ask how you can help. "
-
-                                    "Only when the caller wants to book a new appointment, check an existing appointment, "
-                                    "cancel an appointment, or reschedule an appointment, ask exactly: "
+                                    "Only when the caller wants to book, check, cancel, or reschedule an appointment, ask exactly: "
                                     f"Is this for {first_name}? "
-
                                     f"If the caller clearly says yes, use {first_name}'s patient id and treat identity as confirmed. "
                                     f"If the caller clearly says no, use {second_name}'s patient id and say briefly that you will use {second_name}'s profile. "
                                     "Do not ask the caller to say the second patient's name after they already said no to the first patient. "
                                     "If the caller says it is for someone else, ask for the patient's full name. "
-                                    "If the caller's answer is unclear, do not continue. Repeat the same identity confirmation question. "
-
-                                    "If the caller asks about an existing appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id. "
-                                    "If the caller asks to cancel an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
-                                    "If the caller asks to change or reschedule an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
+                                    "If the caller's answer is unclear, repeat the same identity confirmation question. "
                                     "Do not say or expose any patient id to the caller. "
                                 )
+
                             elif len(current_patient_candidates) >= 3:
                                 patient_options_for_ai = build_patient_options_for_ai(
                                     current_patient_candidates
@@ -800,42 +697,27 @@ async def twilio_realtime(websocket: WebSocket):
                                     " IMPORTANT PATIENT CONTEXT: "
                                     "The caller phone number matches three or more existing patients, likely a family phone number. "
                                     f"Internal patient candidates for tool use only: {json.dumps(patient_options_for_ai, ensure_ascii=False)}. "
-
                                     "Do not ask for patient identity at the start of the call. "
-                                    "First ask how you can help. "
-
-                                    "Only when the caller wants to book a new appointment, check an existing appointment, "
-                                    "cancel an appointment, or reschedule an appointment, ask for the patient's year of birth. "
-
+                                    "Only when the caller wants to book, check, cancel, or reschedule an appointment, ask for the patient's year of birth. "
                                     "Do not read all patient names. "
                                     "Match the birth year only against the provided patient candidates from this phone number. "
-                                    "If exactly one candidate matches the birth year, use that patient's id, treat identity as confirmed, "
-                                    "and say the patient's name clearly. "
+                                    "If exactly one candidate matches the birth year, use that patient's id, treat identity as confirmed, and say the patient's name clearly. "
                                     "If no candidate or more than one candidate matches the birth year, ask for the patient's first name or full name. "
                                     "When matching a spoken name, handle accent, phonetic, and transliteration variations. "
-                                    "Handle cross-language transliteration and phonetic variants of candidate names. "
                                     "Only match against the provided candidates, not the full database. "
                                     "If the caller says it is for someone else, ask for the patient's full name. "
-
-                                    "If the caller asks about an existing appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id. "
-                                    "If the caller asks to cancel an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
-                                    "If the caller asks to change or reschedule an appointment after identity is confirmed, call get_upcoming_appointments with the confirmed patient id first. "
                                     "Do not say or expose any patient id to the caller. "
                                 )
+
                             else:
                                 patient_context = (
                                     " IMPORTANT PATIENT CONTEXT: "
                                     "No existing patient was found for this caller phone number. "
-
                                     "Do not ask for the patient's full name at the start of the call. "
-                                    "First ask how you can help. "
-
-                                    "Only when the caller wants to book a new appointment, check an existing appointment, "
-                                    "cancel an appointment, or reschedule an appointment, ask for the patient's full name. "
-
-                                    "For appointment lookup, cancellation, or reschedule requests, explain that the front desk can help verify the appointment "
-                                    "if no existing patient can be confirmed. "
+                                    "Only when the caller wants to book, check, cancel, or reschedule an appointment, ask for the patient's full name. "
+                                    "For appointment lookup, cancellation, or reschedule requests, explain that the front desk can help verify the appointment if no existing patient can be confirmed. "
                                 )
+
                             clinic_context = (
                                 " IMPORTANT CLINIC NAME CONTEXT: "
                                 f"The clinic name is {current_clinic_name}. "
@@ -861,6 +743,7 @@ async def twilio_realtime(websocket: WebSocket):
                             full_realtime_instructions = "".join(
                                 realtime_instruction_sections
                             )
+
                             session_update = {
                                 "type": "session.update",
                                 "session": {
@@ -917,7 +800,7 @@ async def twilio_realtime(websocket: WebSocket):
                                                             "or equivalent time-preference phrases in the caller's language. "
                                                             "Use null if no time preference."
                                                         ),
-                                                    },                                                    
+                                                    },
                                                     "preferred_date_confirmed": {
                                                         "type": "boolean",
                                                         "description": "True only after the assistant repeated the date and the caller confirmed it.",
@@ -953,15 +836,13 @@ async def twilio_realtime(websocket: WebSocket):
                                                 "required": ["caller_question"],
                                                 "additionalProperties": False,
                                             },
-                                        },  
+                                        },
                                         {
                                             "type": "function",
                                             "name": "get_working_hours",
                                             "description": (
                                                 "Use this when the caller asks about clinic hours, opening hours, closing time, "
-                                                "whether the clinic is open on a specific date or day, or a specific doctor's working hours. "
-                                                "This tool reads calendar_availability_rules and calendar_availability_exceptions. "
-                                                "Clinic-level rules use doctor_id = null. Doctor-specific rules use that doctor's id."
+                                                "whether the clinic is open on a specific date or day, or a specific doctor's working hours."
                                             ),
                                             "parameters": {
                                                 "type": "object",
@@ -986,8 +867,7 @@ async def twilio_realtime(websocket: WebSocket):
                                                 ],
                                                 "additionalProperties": False,
                                             },
-                                        },                                        
-
+                                        },
                                         {
                                             "type": "function",
                                             "name": "get_upcoming_appointments",
@@ -1328,9 +1208,36 @@ async def twilio_realtime(websocket: WebSocket):
                                     for phrase in non_booking_management_phrases
                                 )
 
-                                should_create_request = (
+                                slot_was_selected = bool(
+                                    preferred_date_raw
+                                    and preferred_time_raw
+                                    and date_confirmed
+                                    and time_confirmed
+                                )
+
+                                request_status = "new" if slot_was_selected else "needs_followup"
+
+                                should_create_request = bool(
                                     appointment_request_write_needed
                                     and not is_non_booking_management_call
+                                )
+
+                                print(
+                                    "Appointment request decision | "
+                                    f"appointment_request_write_needed={appointment_request_write_needed}, "
+                                    f"is_non_booking_management_call={is_non_booking_management_call}, "
+                                    f"slot_was_selected={slot_was_selected}, "
+                                    f"request_status={request_status}, "
+                                    f"reason={reason}, "
+                                    f"extracted_reason={extracted_reason}, "
+                                    f"preferred_date_raw={preferred_date_raw}, "
+                                    f"preferred_time_raw={preferred_time_raw}, "
+                                    f"date_confirmed={date_confirmed}, "
+                                    f"time_confirmed={time_confirmed}, "
+                                    f"doctor_id={doctor_id}, "
+                                    f"preferred_doctor_name={preferred_doctor_name}, "
+                                    f"booking_options_history_count={len(booking_options_history)}, "
+                                    f"should_create_request={should_create_request}"
                                 )
 
                                 if should_create_request:
@@ -1340,10 +1247,10 @@ async def twilio_realtime(websocket: WebSocket):
                                         patient_phone=current_caller_phone,
                                         patient_id=patient_id,
                                         patient_name=patient_name,
-                                        reason=reason,
+                                        reason=reason or extracted_reason or "Appointment request needs follow-up",
                                         preferred_time=preferred_time_combined,
                                         urgency=urgency,
-                                        status="new",
+                                        status=request_status,
                                         doctor_id=doctor_id,
                                         preferred_doctor_name=preferred_doctor_name,
                                     )
@@ -1375,12 +1282,14 @@ async def twilio_realtime(websocket: WebSocket):
 
                                     print(
                                         "Realtime appointment request created after-call AI extraction: "
-                                        f"patient_id={patient_id}, service={service_match}, details={appointment_details}"
+                                        f"status={request_status}, patient_id={patient_id}, "
+                                        f"service={service_match}, details={appointment_details}"
                                     )
 
                                 else:
                                     print(
                                         "No appointment request created after-call AI extraction. "
+                                        f"appointment_request_write_needed={appointment_request_write_needed}, "
                                         f"is_non_booking_management_call={is_non_booking_management_call}, "
                                         f"service_match={service_match}, details={appointment_details}"
                                     )
@@ -1486,6 +1395,8 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 appointment_request_write_needed = True
 
+                                tool_started_at = time.perf_counter()
+
                                 tool_result = get_booking_options_for_ai(
                                     clinic_id=current_clinic_id,
                                     doctors=current_doctors,
@@ -1498,7 +1409,15 @@ async def twilio_realtime(websocket: WebSocket):
                                     ),
                                 )
 
-                                print(f"Realtime booking tool result: {tool_result}")
+                                tool_duration = time.perf_counter() - tool_started_at
+
+                                print(
+                                    "Realtime booking tool result | "
+                                    f"duration_seconds={tool_duration:.3f} | "
+                                    f"args={args} | "
+                                    f"result={tool_result}"
+                                )
+
                                 if tool_result.get("ok") and tool_result.get("slots"):
                                     booking_options_history.append(
                                         {
@@ -1512,7 +1431,7 @@ async def twilio_realtime(websocket: WebSocket):
                                             ),
                                             "slots": tool_result.get("slots") or [],
                                         }
-                                    )                                
+                                    )
 
                                 await openai_ws.send(
                                     json.dumps(
@@ -1581,10 +1500,6 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 print(f"Realtime working hours tool result: {tool_result}")
 
-                                # Important:
-                                # Working-hours questions are informational only.
-                                # Do NOT set appointment_request_write_needed = True here.
-
                                 await openai_ws.send(
                                     json.dumps(
                                         {
@@ -1616,9 +1531,6 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 print(f"Realtime appointment lookup result: {tool_result}")
-
-                                # Appointment lookup is informational.
-                                # Do NOT set appointment_request_write_needed = True here.
 
                                 await openai_ws.send(
                                     json.dumps(
@@ -1653,9 +1565,6 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 print(f"Realtime cancel appointment result: {tool_result}")
 
-                                # Cancel updates the appointment directly.
-                                # Do NOT set appointment_request_write_needed = True here.
-
                                 await openai_ws.send(
                                     json.dumps(
                                         {
@@ -1673,6 +1582,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 await create_short_audio_response()
+
                             elif tool_name == "reschedule_appointment":
                                 try:
                                     args = json.loads(arguments_raw)
@@ -1693,12 +1603,6 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 print(f"Realtime reschedule appointment result: {tool_result}")
 
-                                # Very important:
-                                # Reschedule uses get_booking_options before this, which sets
-                                # appointment_request_write_needed = True.
-                                # But reschedule_appointment_for_ai already cancels the old appointment
-                                # and creates the new appointment_request.
-                                # Therefore, reset this flag to avoid creating a duplicate request at call end.
                                 if tool_result.get("ok"):
                                     appointment_request_write_needed = False
 
@@ -1719,6 +1623,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 await create_short_audio_response()
+
                             else:
                                 print(f"Unknown realtime tool requested: {tool_name}")
 
