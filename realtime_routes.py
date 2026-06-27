@@ -52,6 +52,60 @@ router = APIRouter()
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
+def sanitize_booking_options_for_patient(tool_result: dict) -> dict:
+    """
+    Keep internal IDs needed for booking/rescheduling,
+    but remove doctor names from the model-visible tool output
+    so the assistant does not say doctor names by default.
+    """
+    if not isinstance(tool_result, dict):
+        return tool_result
+
+    sanitized = dict(tool_result)
+
+    slots = sanitized.get("slots")
+
+    if isinstance(slots, list):
+        sanitized_slots = []
+
+        for slot in slots:
+            if not isinstance(slot, dict):
+                sanitized_slots.append(slot)
+                continue
+
+            clean_slot = dict(slot)
+
+            # Do not expose doctor/provider names to the model voice response.
+            clean_slot.pop("doctor_name", None)
+            clean_slot.pop("doctor_display_name", None)
+            clean_slot.pop("doctor_full_name", None)
+            clean_slot.pop("provider_name", None)
+            clean_slot.pop("clinician_name", None)
+
+            # If there is a nested doctor/provider object, keep only the id.
+            doctor = clean_slot.get("doctor")
+            if isinstance(doctor, dict):
+                clean_slot["doctor"] = {
+                    "id": doctor.get("id") or doctor.get("doctor_id")
+                }
+
+            provider = clean_slot.get("provider")
+            if isinstance(provider, dict):
+                clean_slot["provider"] = {
+                    "id": provider.get("id") or provider.get("doctor_id")
+                }
+
+            sanitized_slots.append(clean_slot)
+
+        sanitized["slots"] = sanitized_slots
+
+    sanitized["patient_facing_instruction"] = (
+        "Offer only the date and time to the caller. "
+        "Do not mention doctor names unless the caller specifically asks."
+    )
+
+    return sanitized
+
 
 async def extract_appointment_details_with_openai(
     transcript: str,
@@ -1192,12 +1246,8 @@ async def twilio_realtime(websocket: WebSocket):
                                     doctors=current_doctors,
                                     doctor_name=args.get("doctor_name"),
                                     reason=args.get("reason"),
-                                    preferred_date_raw=args.get(
-                                        "preferred_date_raw"
-                                    ),
-                                    preferred_time_raw=args.get(
-                                        "preferred_time_raw"
-                                    ),
+                                    preferred_date_raw=args.get("preferred_date_raw"),
+                                    preferred_time_raw=args.get("preferred_time_raw"),
                                     preferred_date_confirmed=bool(
                                         args.get("preferred_date_confirmed")
                                     ),
@@ -1212,29 +1262,24 @@ async def twilio_realtime(websocket: WebSocket):
                                     f"result={tool_result}"
                                 )
 
+                                # Keep the full internal result for after-call extraction and DB saving.
                                 if tool_result.get("ok") and tool_result.get("slots"):
                                     booking_options_history.append(
                                         {
-                                            "tool_call_index": len(
-                                                booking_options_history
-                                            )
-                                            + 1,
-                                            "doctor_name_requested": args.get(
-                                                "doctor_name"
-                                            ),
+                                            "tool_call_index": len(booking_options_history) + 1,
+                                            "doctor_name_requested": args.get("doctor_name"),
                                             "reason": args.get("reason"),
-                                            "preferred_date_raw": args.get(
-                                                "preferred_date_raw"
-                                            ),
-                                            "preferred_time_raw": args.get(
-                                                "preferred_time_raw"
-                                            ),
+                                            "preferred_date_raw": args.get("preferred_date_raw"),
+                                            "preferred_time_raw": args.get("preferred_time_raw"),
                                             "preferred_date_confirmed": bool(
                                                 args.get("preferred_date_confirmed")
                                             ),
                                             "slots": tool_result.get("slots") or [],
                                         }
                                     )
+
+                                # Send a sanitized patient-facing version to the Realtime model.
+                                patient_facing_tool_result = sanitize_booking_options_for_patient(tool_result)
 
                                 await openai_ws.send(
                                     json.dumps(
@@ -1244,7 +1289,7 @@ async def twilio_realtime(websocket: WebSocket):
                                                 "type": "function_call_output",
                                                 "call_id": tool_call_id,
                                                 "output": json.dumps(
-                                                    tool_result,
+                                                    patient_facing_tool_result,
                                                     ensure_ascii=False,
                                                 ),
                                             },
@@ -1253,7 +1298,6 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 await create_short_audio_response()
-
                             elif tool_name == "get_faq_answer":
                                 try:
                                     args = json.loads(arguments_raw)
