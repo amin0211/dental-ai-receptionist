@@ -310,6 +310,7 @@ async def twilio_realtime(websocket: WebSocket):
 
     stream_sid = None
     current_call_id = None
+    current_response_id = None
     transcript_parts = []
     ai_transcript_buffer = ""
 
@@ -445,6 +446,8 @@ async def twilio_realtime(websocket: WebSocket):
                                                 "threshold": 0.5,
                                                 "prefix_padding_ms": 600,
                                                 "silence_duration_ms": 700,
+                                                "create_response": True,
+                                                "interrupt_response": True,
                                             },
                                         },
                                         "output": {
@@ -1051,6 +1054,7 @@ async def twilio_realtime(websocket: WebSocket):
 
             async def receive_from_openai():
                 nonlocal stream_sid
+                nonlocal current_response_id
                 nonlocal transcript_parts
                 nonlocal ai_transcript_buffer
                 nonlocal current_clinic_id
@@ -1069,8 +1073,41 @@ async def twilio_realtime(websocket: WebSocket):
                         if event_type in ["session.created", "session.updated"]:
                             print(f"OpenAI event: {event_type}")
 
+                        elif event_type == "input_audio_buffer.speech_started":
+                            print("OpenAI event: input_audio_buffer.speech_started")
+
+                            if current_response_id:
+                                try:
+                                    await openai_ws.send(
+                                        json.dumps(
+                                            {
+                                                "type": "response.cancel",
+                                            }
+                                        )
+                                    )
+                                    print(f"Cancelled active OpenAI response: {current_response_id}")
+                                except Exception as e:
+                                    print(f"Failed to cancel active response: {e}")
+
+                                current_response_id = None
+
+                            if stream_sid:
+                                await websocket.send_text(
+                                    json.dumps(
+                                        {
+                                            "event": "clear",
+                                            "streamSid": stream_sid,
+                                        }
+                                    )
+                                )
+                                print("Sent Twilio clear event")
+                                
+                        elif event_type == "input_audio_buffer.speech_stopped":
+                            print("OpenAI event: input_audio_buffer.speech_stopped")
+
                         elif event_type == "response.created":
-                            print("OpenAI event: response.created")
+                            current_response_id = response.get("response", {}).get("id")
+                            print(f"OpenAI event: response.created | response_id={current_response_id}")
 
                         elif event_type in [
                             "response.audio.delta",
@@ -1410,6 +1447,8 @@ async def twilio_realtime(websocket: WebSocket):
                                 print(f"Unknown realtime tool requested: {tool_name}")
 
                         elif event_type == "response.done":
+                            current_response_id = None
+
                             track_realtime_response_done(
                                 openai_usage_totals,
                                 response,

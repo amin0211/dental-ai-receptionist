@@ -250,7 +250,11 @@ def build_unclear_audio_and_safety_instructions() -> str:
         "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately. "
 
         "CONFIRMATION SAFETY: "
-        "Repeat the same yes/no question once. "
+        "When the pending question is a yes/no confirmation, clear yes examples include yes, yeah, correct, right, that's right, sure, بله, آره, درسته,はい. "
+        "Clear no examples include no, nope, incorrect, not correct, نه, خیر, درست نیست. "
+        "If the caller clearly says yes to the pending confirmation question, immediately continue to the next booking step. "
+        "If the caller clearly says no, discard the repeated value and ask for the corrected value. "
+        "If the caller's answer is unclear, garbled, unrelated, or not a clear yes/no, repeat the exact same confirmation question once. "
     )
 
 
