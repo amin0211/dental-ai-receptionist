@@ -2183,7 +2183,7 @@ def get_booking_options_for_ai(
         if not doctor_id:
             continue
 
-        max_slots_to_fetch = 20 if preferred_time_raw else 2
+        max_slots_to_fetch = 100 if preferred_time_raw else 2
 
         if parsed_preferred_date:
             doctor_slots = find_next_available_slots_for_doctor(
@@ -2204,7 +2204,7 @@ def get_booking_options_for_ai(
                 timezone_name=timezone_name,
                 start_date=None,
                 days_ahead=60,
-                max_slots=30 if preferred_time_raw else 2,
+                max_slots=max_slots_to_fetch,
                 step_minutes=15,
             )
         all_slots.extend(

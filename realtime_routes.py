@@ -984,7 +984,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     "جابجا کردن وقت",
                                 ]
 
-                                transcript_lower = full_transcript.lower()
+                                transcript_lower = caller_only_transcript.lower()
 
                                 is_non_booking_management_call = any(
                                     phrase.lower() in transcript_lower
