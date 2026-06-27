@@ -21,7 +21,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://YOUR-VERCEL-DASHBOARD-DOMAIN.vercel.app",
+        "https://dental-ai-receptionist-bice.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
