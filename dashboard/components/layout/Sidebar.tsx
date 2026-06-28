@@ -50,17 +50,22 @@ const navigationItems = [
   },
 ];
 
-export default function Sidebar() {
+type SidebarProps = {
+  onNavigate?: () => void;
+};
+
+export default function Sidebar({ onNavigate }: SidebarProps) {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden min-h-screen w-54 shrink-0 border-r border-slate-200 bg-white px-4 py-6 lg:block">
+    <aside className="min-h-screen w-54 shrink-0 border-r border-slate-200 bg-white px-4 py-6">
       <div className="mb-8 px-2">
         <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-lg font-bold text-white">
           AI
         </div>
 
         <h1 className="text-lg font-bold text-slate-900">Clinic AI</h1>
+
         <p className="mt-1 text-sm text-slate-500">
           Receptionist Dashboard
         </p>
@@ -75,6 +80,7 @@ export default function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              onClick={onNavigate}
               className={`flex items-center rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                 isActive
                   ? "bg-blue-50 text-blue-700"
@@ -89,4 +95,3 @@ export default function Sidebar() {
     </aside>
   );
 }
-
