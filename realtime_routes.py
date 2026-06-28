@@ -473,6 +473,7 @@ async def twilio_realtime(websocket: WebSocket):
                 nonlocal current_patient_candidates
                 nonlocal booking_options_history
                 nonlocal realtime_session_ready
+                nonlocal end_call_requested
 
                 try:
                     while True:
@@ -818,6 +819,13 @@ async def twilio_realtime(websocket: WebSocket):
 
                         elif event == "media":
                             if not realtime_session_ready:
+                                continue
+
+                            if end_call_requested:
+                                print(
+                                    "Ignoring Twilio media because call end is already requested | "
+                                    f"current_twilio_call_sid={current_twilio_call_sid}"
+                                )
                                 continue
 
                             payload = data["media"]["payload"]
@@ -1474,8 +1482,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 await create_short_audio_response()
-                                if end_call_requested:
-                                    await schedule_call_end("booking_request_completed")
+
 
                             elif tool_name == "get_faq_answer":
                                 try:

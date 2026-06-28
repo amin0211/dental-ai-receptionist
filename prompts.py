@@ -219,6 +219,8 @@ def build_booking_instructions() -> str:
         "SLOT CONFIRMATION RULES: "
         "After offering one slot, complete the booking only if the caller clearly accepts that offered slot. "
         "Clear acceptance includes yes, yeah, correct, that works, sounds good, okay for that time, بله, آره, درسته. "
+        "If the caller says yes to the offered single slot, immediately call note_booking_request. Do not answer directly. "
+        "Never say the request is noted in a normal assistant response. Say it only after note_booking_request succeeds. "
         "Do not treat unclear audio, random words, unrelated speech, background speech, silence, hello, mm-hmm, or vague okay as acceptance. "
         "If the caller clearly rejects the offered slot, asks for another date, another time, morning, afternoon, evening, later, earlier, or a specific doctor, call get_booking_options again with the new preference. "
         "If the caller gives a new preferred date, repeat only that date and ask if correct before calling get_booking_options again. "
