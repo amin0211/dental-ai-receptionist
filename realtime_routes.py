@@ -6,6 +6,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from openai import AsyncOpenAI
 import websockets
 
+import os
+from twilio.rest import Client as TwilioClient
+
 from config import (
     OPENAI_API_KEY,
     OPENAI_REALTIME_MODEL,
@@ -51,6 +54,35 @@ from supabase_service import (
 router = APIRouter()
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+
+twilio_client = (
+    TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN
+    else None
+)
+
+
+async def end_twilio_call(call_sid: str | None):
+    if not call_sid:
+        print("Cannot end call: missing call_sid")
+        return
+
+    if not twilio_client:
+        print("Cannot end call: Twilio client is not initialized")
+        return
+
+    try:
+        await asyncio.to_thread(
+            lambda: twilio_client.calls(call_sid).update(status="completed")
+        )
+
+        print(f"Twilio call ended: {call_sid}")
+
+    except Exception as e:
+        print(f"Failed to end Twilio call {call_sid}: {e}")
 
 def sanitize_booking_options_for_patient(tool_result: dict) -> dict:
     """
@@ -368,6 +400,9 @@ async def twilio_realtime(websocket: WebSocket):
     transcript_parts = []
     ai_transcript_buffer = ""
 
+    end_call_requested = False
+    end_call_task = None
+
     openai_usage_totals = create_openai_usage_totals()
 
     current_clinic_id = None
@@ -406,10 +441,27 @@ async def twilio_realtime(websocket: WebSocket):
                     )
                 )
 
+            async def schedule_call_end(reason: str):
+                nonlocal end_call_task
+
+                if end_call_task:
+                    return
+
+                print(f"Call end scheduled | reason={reason}")
+
+                async def delayed_end():
+                    # Give Twilio a short moment to play the final audio.
+                    await asyncio.sleep(2.0)
+                    await end_twilio_call(current_twilio_call_sid)
+
+                end_call_task = asyncio.create_task(delayed_end())
+                
+
             async def receive_from_twilio():
                 nonlocal stream_sid
                 nonlocal current_call_id
                 nonlocal current_clinic_id
+                nonlocal current_twilio_call_sid
                 nonlocal current_clinic_name
                 nonlocal current_caller_phone
                 nonlocal transcript_parts
@@ -437,6 +489,7 @@ async def twilio_realtime(websocket: WebSocket):
                             call_sid = custom_params.get("call_sid") or start_data.get(
                                 "callSid"
                             )
+                            current_twilio_call_sid = call_sid
                             caller = normalize_phone(custom_params.get("caller_phone"))
                             to_number = normalize_phone(custom_params.get("to_number"))
 
@@ -986,7 +1039,7 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 transcript_lower = caller_only_transcript.lower()
 
-                                is_non_booking_management_call = any(
+                                raw_non_booking_management_call = any(
                                     phrase.lower() in transcript_lower
                                     for phrase in non_booking_management_phrases
                                 )
@@ -1002,11 +1055,21 @@ async def twilio_realtime(websocket: WebSocket):
                                     "new" if slot_was_selected else "needs_followup"
                                 )
 
-                                should_create_request = bool(
+                                booking_flow_happened = bool(
                                     appointment_request_write_needed
-                                    and not is_non_booking_management_call
+                                    or booking_options_history
+                                    or slot_was_selected
                                 )
 
+                                is_non_booking_management_call = bool(
+                                    raw_non_booking_management_call
+                                    and not booking_flow_happened
+                                )
+
+                                should_create_request = bool(
+                                    booking_flow_happened
+                                    and not is_non_booking_management_call
+                                )
                                 print(
                                     "Appointment request decision | "
                                     f"appointment_request_write_needed={appointment_request_write_needed}, "
@@ -1111,6 +1174,7 @@ async def twilio_realtime(websocket: WebSocket):
                 nonlocal current_response_id
                 nonlocal transcript_parts
                 nonlocal ai_transcript_buffer
+                nonlocal end_call_requested
                 nonlocal current_clinic_id
                 nonlocal current_doctors
                 nonlocal booking_options_history
@@ -1217,6 +1281,30 @@ async def twilio_realtime(websocket: WebSocket):
                                     "AI transcript completed: "
                                     f"{final_ai_transcript.strip()}"
                                 )
+
+                                final_text = final_ai_transcript.strip()
+                                final_text_lower = final_text.lower()
+
+                                booking_final_message_detected = (
+                                    appointment_request_write_needed
+                                    and booking_options_history
+                                    and (
+                                        "request is noted" in final_text_lower
+                                        or "front desk will confirm" in final_text_lower
+                                        or "front desk will contact" in final_text_lower
+                                        or "درخواست" in final_text
+                                        or "پذیرش" in final_text
+                                        or "ثبت شد" in final_text
+                                    )
+                                )
+
+                                goodbye_detected = (
+                                    final_text_lower in ["goodbye", "goodbye.", "bye", "bye."]
+                                    or "خداحافظ" in final_text
+                                )
+
+                                if booking_final_message_detected or goodbye_detected:
+                                    end_call_requested = True
 
                             ai_transcript_buffer = ""
 
@@ -1468,6 +1556,7 @@ async def twilio_realtime(websocket: WebSocket):
 
                                 if tool_result.get("ok"):
                                     appointment_request_write_needed = False
+                                    end_call_requested = True
 
                                 await openai_ws.send(
                                     json.dumps(
@@ -1509,6 +1598,8 @@ async def twilio_realtime(websocket: WebSocket):
                                 update_call_func=update_call,
                                 model=OPENAI_REALTIME_MODEL,
                             )
+                            if end_call_requested:
+                                await schedule_call_end("final_action_completed")
 
                         elif event_type == "error":
                             print(f"OpenAI error: {response}")

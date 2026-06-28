@@ -66,11 +66,10 @@ def build_extraction_system_prompt(
 
 def build_short_audio_response_instructions() -> str:
     return (
-
         "For FAQ answers, use one short sentence. "
         "For working hours, answer with only the day and hours. "
-        "For cancellation success, say only: 'Your appointment is cancelled.' "
-        "For reschedule success, say only: 'Your request is noted. The front desk will confirm.' "
+        "For cancellation success, say in the caller's current language that the appointment is cancelled, then ask if they want to book a new appointment. "
+        "For reschedule success, say in the caller's current language that the request is noted and the front desk will confirm. "
     )
 
 
@@ -161,6 +160,9 @@ def build_cancellation_instructions() -> str:
         "If multiple appointments exist, list them as first, second, third with date and start time only, then ask which one. Do not mention doctor names. "
         "Only call cancel_appointment after the caller clearly confirms cancelling that exact appointment. "
         "Never cancel based on unclear audio, background speech, maybe, or ambiguous yes. "
+        "After cancellation succeeds, ask once if the caller wants to book a new appointment. "
+        "If yes, do not ask identity again; ask for the dental visit reason and continue new booking. "
+        "If no, unclear, or unrelated, say goodbye. "
     )
 
 
@@ -176,6 +178,7 @@ def build_reschedule_instructions() -> str:
         "Offer two new slots. "
         "Only call reschedule_appointment after the caller clearly selects one offered new slot. "
         "Never say the new appointment is confirmed. "
+        "After a reschedule request is successfully noted, end the call politely. "
     )
 
 
@@ -214,29 +217,17 @@ def build_booking_instructions() -> str:
         "Do not speak starts_at, date, start_time, or the year unless the display field includes it. "
         "Do not mention doctor names or end times. "
 
-        # "SLOT SELECTION AND CONFIRMATION RULES: "
-        # "For slot selection, accept first/second choices even if the wording, accent, pronunciation, or transcription is not exact. "
-        # "Choose the first offered slot if the caller's answer sounds closer to first, first one, option one, the first, earlier one, or first option. "
-        # "Choose the second offered slot if the caller's answer sounds closer to second, second one, option two, the second, later one, or second option. "
-        # "If the caller repeats an offered time or offered date/time, choose the matching offered slot. "
-        # "Do not choose first or second if the caller asks for a different date, different time, another option, neither option, or says the offered options do not work. "
-        # "Do not treat yes, okay, hello, mm-hmm, background speech, random fragments, or unrelated speech as a slot choice. "
-        # "If it is still not possible to tell first or second, ask exactly once: Did you prefer the first option or the second option? "
-        # "If still unclear after that, say: The front desk will contact you to find the best time. "
-        # "Never say the request is noted until a clear slot choice is made. "
-        # "After saying the request is noted or that the front desk will confirm, the booking flow is complete. "
-        # "Do not ask any more slot, date, time, doctor, or confirmation questions after that. "
-        # "If the caller speaks again with unclear, random, or unrelated audio after the booking flow is complete, say only: Goodbye. "
-        # "If the caller asks a new clear question after the booking flow is complete, answer only that question briefly. "
-
         "SLOT SELECTION AND CONFIRMATION RULES: "
         "After offering slots, complete the booking only if the caller clearly selects one offered slot. "
         "A clear slot selection must contain first/second, option one/two, earlier/later, or one exact offered time. "
         "Accept minor transcription errors only when the ordinal choice is still clear, like 'first one is bitter' for 'first one is better'. "
         "Do not treat yes, okay, good, fine, random words, unrelated speech, background speech, or unclear audio as a slot choice. "
-        "If no clear slot is selected, ask exactly once: Did you prefer the first option or the second option? "
+        "If no clear slot is selected, ask exactly once in the caller's current language: first option or second option? "
         "Only after a clear slot choice, say the request is noted and the front desk will confirm. "
         "If still unclear after the repeat question, say the front desk will contact them to find the best time. "
+        "After a new booking request is noted, end the call politely. "
+        "Do not ask for another appointment in the same call after a new booking request is noted. "
+
 
         "FOLLOW-UP RULES: "
         "If no slots are found, say the front desk will contact them to find another time. "
