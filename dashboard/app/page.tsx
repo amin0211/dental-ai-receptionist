@@ -1,49 +1,60 @@
 import Link from "next/link";
 
-const platformFeatures = [
-  "AI phone receptionist",
+const coreFeatures = [
+  "AI phone receptionist for dental clinics",
   "Appointment request capture",
-  "Customer and patient data workflows",
-  "Calendar and software integrations",
-  "Industry-specific AI assistants",
+  "Change and cancellation request logging",
+  "Dental FAQ and clinic policy answers",
+  "Urgent call flagging",
 ];
 
-const dentHighlights = [
+const clinicPainPoints = [
   {
-    title: "Answers calls when the front desk is busy",
+    title: "Busy front desk",
     description:
-      "P-Core Dent can answer incoming patient calls while staff are helping in-person patients, handling files, or coordinating appointments.",
+      "When reception is handling in-person patients, files, phone calls, and scheduling at the same time, P-Core AI can help answer incoming calls and organize requests.",
   },
   {
-    title: "Handles after-hours requests",
+    title: "After-hours calls",
     description:
-      "When the clinic is closed, the AI can collect new appointment requests, cancellation requests, messages, and common questions.",
+      "When patients call outside business hours, the system can collect appointment requests, messages, cancellation requests, and common questions.",
   },
   {
-    title: "Collects appointment details",
+    title: "Repeated questions",
     description:
-      "The system can ask for the patient name, reason for visit, preferred date, and preferred time, then prepare the information for the front desk.",
+      "Insurance, direct billing, CDCP, parking, new patients, children, payment methods, cancellation policy, and clinic services can be answered based on clinic information.",
   },
   {
-    title: "Identifies follow-up cases",
+    title: "Unclear follow-ups",
     description:
-      "Incomplete calls, urgent concerns, cancellation requests, and cases that need staff review can be flagged for follow-up.",
+      "Incomplete calls, urgent symptoms, appointment requests, and cases that need staff review can be marked clearly for the reception team.",
   },
 ];
 
-const dentCapabilities = [
-  "Initial call greeting",
+const dentalCapabilities = [
+  "Initial patient call greeting",
   "Existing patient identification",
   "New patient information capture",
   "Reason-for-visit collection",
   "Appointment request management",
   "Change or cancellation request logging",
-  "FAQ answers for insurance, parking, CDCP, payments, and clinic policies",
-  "Urgent call detection for pain, swelling, infection, or broken teeth",
-  "Careful handling of medical questions",
+  "Common dental FAQ answers",
+  "Urgent call detection",
+  "Careful medical question handling",
   "Call summary storage",
   "Follow-up organization",
   "Clinic-specific customization",
+];
+
+const faqItems = [
+  "Insurance and direct billing",
+  "CDCP questions",
+  "Parking information",
+  "New patient intake",
+  "Children and family appointments",
+  "Cancellation policy",
+  "Payment methods",
+  "Checkups, cleanings, tooth pain, wisdom teeth, and file transfer questions",
 ];
 
 export default function HomePage() {
@@ -60,7 +71,7 @@ export default function HomePage() {
             <div>
               <p className="text-xl font-bold tracking-tight">P-Core AI</p>
               <p className="text-xs text-slate-400">
-                AI automation for service businesses
+                AI receptionist for dental clinics
               </p>
             </div>
           </Link>
@@ -70,7 +81,7 @@ export default function HomePage() {
               href="/dent"
               className="hidden text-slate-300 hover:text-white sm:inline"
             >
-              P-Core Dent
+              Dental Solution
             </Link>
 
             <a
@@ -92,23 +103,23 @@ export default function HomePage() {
 
       {/* Hero */}
       <section className="relative overflow-hidden">
-        <div className="absolute left-1/2 top-0 h-[500px] w-[500px] -translate-x-1/2 rounded-full bg-cyan-400/10 blur-3xl" />
-        <div className="absolute right-0 top-32 h-[400px] w-[400px] rounded-full bg-blue-500/10 blur-3xl" />
+        <div className="absolute left-1/2 top-0 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-cyan-400/10 blur-3xl" />
+        <div className="absolute right-0 top-32 h-[420px] w-[420px] rounded-full bg-blue-500/10 blur-3xl" />
 
         <div className="relative mx-auto grid max-w-7xl gap-12 px-6 py-24 lg:grid-cols-2 lg:items-center">
           <div>
             <p className="mb-5 inline-flex rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-medium text-cyan-300">
-              AI • Voice • Data • Workflow Automation
+              Dental AI Reception • Calls • Scheduling • Follow-up
             </p>
 
             <h1 className="max-w-4xl text-5xl font-black tracking-tight md:text-6xl">
-              The AI core for business communication.
+              AI receptionist built specifically for dental clinics.
             </h1>
 
             <p className="mt-6 max-w-xl text-lg leading-8 text-slate-300">
-              P-Core AI builds intelligent software that connects calls,
-              appointments, customer data, workflows, and business operations
-              into one automated layer.
+              P-Core AI helps dental front desks answer patient calls, collect
+              appointment requests, handle routine questions, and organize
+              follow-ups without replacing the reception team.
             </p>
 
             <div className="mt-8 flex flex-wrap gap-4">
@@ -116,7 +127,7 @@ export default function HomePage() {
                 href="/dent"
                 className="rounded-2xl bg-cyan-400 px-6 py-3 font-bold text-slate-950 shadow-lg shadow-cyan-400/20 hover:bg-cyan-300"
               >
-                Explore P-Core Dent
+                View Dental Solution
               </Link>
 
               <a
@@ -128,9 +139,8 @@ export default function HomePage() {
             </div>
 
             <p className="mt-6 max-w-lg text-sm leading-6 text-slate-500">
-              Built for clinics and service businesses that need faster call
-              handling, cleaner follow-ups, and more organized customer
-              communication.
+              Designed for dental clinics that need faster call handling, more
+              organized appointment requests, and cleaner front-desk follow-up.
             </p>
           </div>
 
@@ -139,20 +149,20 @@ export default function HomePage() {
               <div className="mb-6 flex items-center justify-between">
                 <div>
                   <p className="text-sm font-semibold text-cyan-300">
-                    P-Core Platform
+                    P-Core Dental Reception System
                   </p>
                   <h2 className="mt-2 text-2xl font-bold">
-                    One AI layer for calls, data, and operations.
+                    One AI layer for dental calls and front-desk workflow.
                   </h2>
                 </div>
 
                 <div className="hidden rounded-2xl bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-300 sm:block">
-                  Live system
+                  Dental-focused
                 </div>
               </div>
 
               <div className="space-y-4">
-                {platformFeatures.map((item) => (
+                {coreFeatures.map((item) => (
                   <div
                     key={item}
                     className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-slate-200"
@@ -167,23 +177,24 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Main Product */}
+      {/* Positioning */}
       <section className="mx-auto max-w-7xl px-6 py-20">
         <div className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
           <div>
             <p className="mb-4 inline-flex rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-sm font-medium text-emerald-300">
-              Featured product
+              Built for dental reception teams
             </p>
 
             <h2 className="text-4xl font-black tracking-tight md:text-5xl">
-              P-Core Dent
+              Not a replacement for your receptionist. A support layer for your
+              front desk.
             </h2>
 
             <p className="mt-5 text-lg leading-8 text-slate-300">
-              An AI receptionist and front-desk assistant for dental clinics.
-              It is designed to support the reception team, not replace it.
-              It helps manage routine calls, appointment requests, common
-              questions, and follow-up cases more consistently.
+              P-Core AI is designed to work beside the dental reception team.
+              It helps manage simple calls, repeated questions, appointment
+              requests, cancellations, and cases that need follow-up, so staff
+              can focus on patients who need human attention.
             </p>
 
             <div className="mt-8 flex flex-wrap gap-4">
@@ -191,7 +202,7 @@ export default function HomePage() {
                 href="/dent"
                 className="rounded-2xl bg-white px-6 py-3 font-bold text-slate-950 hover:bg-slate-200"
               >
-                View dental solution
+                Learn more
               </Link>
 
               <Link
@@ -204,7 +215,7 @@ export default function HomePage() {
           </div>
 
           <div className="grid gap-5 sm:grid-cols-2">
-            {dentHighlights.map((feature) => (
+            {clinicPainPoints.map((feature) => (
               <div
                 key={feature.title}
                 className="rounded-3xl border border-white/10 bg-white/5 p-6"
@@ -219,23 +230,23 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Dental Capabilities */}
+      {/* Capabilities */}
       <section className="border-y border-white/10 bg-white/[0.03]">
         <div className="mx-auto max-w-7xl px-6 py-20">
           <div className="mb-10 max-w-3xl">
             <h2 className="text-3xl font-black tracking-tight md:text-4xl">
-              What P-Core Dent can help with
+              Dental call capabilities
             </h2>
 
             <p className="mt-4 text-slate-300">
-              The system can be configured around each clinic’s services,
-              hours, cancellation policies, insurance information, booking
+              P-Core AI can be configured around each dental clinic’s services,
+              hours, cancellation policies, insurance information, appointment
               process, and follow-up workflow.
             </p>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {dentCapabilities.map((capability, index) => (
+            {dentalCapabilities.map((capability, index) => (
               <div
                 key={capability}
                 className="rounded-2xl border border-white/10 bg-slate-950/60 p-5"
@@ -251,27 +262,60 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Safety / Positioning */}
+      {/* FAQ / Common Questions */}
       <section className="mx-auto max-w-7xl px-6 py-20">
+        <div className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
+          <div>
+            <p className="mb-4 inline-flex rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-medium text-cyan-300">
+              Dental FAQ automation
+            </p>
+
+            <h2 className="text-3xl font-black tracking-tight md:text-4xl">
+              Answers routine patient questions using clinic-specific
+              information.
+            </h2>
+
+            <p className="mt-5 text-slate-300">
+              Many dental calls are about the same topics. P-Core AI can answer
+              common questions based on each clinic’s approved information and
+              policies.
+            </p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {faqItems.map((item) => (
+              <div
+                key={item}
+                className="rounded-2xl border border-white/10 bg-white/5 p-5"
+              >
+                <p className="font-semibold text-slate-100">{item}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Safety / Medical */}
+      <section className="mx-auto max-w-7xl px-6 pb-20">
         <div className="rounded-[2rem] border border-cyan-400/20 bg-cyan-400/10 p-8 md:p-10">
           <div className="grid gap-8 lg:grid-cols-3">
             <div className="lg:col-span-1">
               <p className="text-sm font-bold uppercase tracking-[0.25em] text-cyan-300">
-                Designed for real clinics
+                Dental safety workflow
               </p>
 
               <h2 className="mt-4 text-3xl font-black">
-                Human-led, AI-assisted front desk.
+                Careful handling for urgent and medical questions.
               </h2>
             </div>
 
             <div className="lg:col-span-2">
               <p className="text-lg leading-8 text-slate-200">
-                P-Core Dent is built to organize patient communication and
-                reduce repetitive front-desk workload. Sensitive medical
-                questions are handled carefully: the system does not provide a
-                final diagnosis and can guide patients toward staff review,
-                dentist review, or urgent care when needed.
+                P-Core AI can flag urgent calls involving severe pain, swelling,
+                infection, broken teeth, or other emergency concerns. For
+                sensitive medical questions, the system does not provide a final
+                diagnosis and can guide the patient toward staff review, dentist
+                review, or urgent care when appropriate.
               </p>
 
               <div className="mt-8 grid gap-4 sm:grid-cols-3">
@@ -301,13 +345,13 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Contact */}
+      {/* Dental Integrations / Contact */}
       <section className="mx-auto max-w-7xl px-6 pb-20">
         <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/5">
           <div className="grid gap-0 lg:grid-cols-[1fr_0.9fr]">
             <div className="p-8 md:p-10">
               <p className="mb-4 inline-flex rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-medium text-cyan-300">
-                Development & Integrations
+                Dental Software Integrations
               </p>
 
               <h2 className="text-3xl font-black tracking-tight md:text-4xl">
@@ -315,9 +359,10 @@ export default function HomePage() {
               </h2>
 
               <p className="mt-5 max-w-2xl text-slate-300">
-                For technical questions, integration discussions, API access,
-                dental software compatibility, or partnership inquiries, contact
-                our development and integrations team.
+                For dental software compatibility, PMS integrations, API
+                access, calendar workflows, clinic pilots, or technical
+                partnership inquiries, contact our development and integrations
+                team.
               </p>
 
               <div className="mt-8 flex flex-wrap gap-4">
@@ -332,14 +377,14 @@ export default function HomePage() {
                   href="/dent"
                   className="rounded-2xl border border-white/15 px-6 py-3 font-bold text-white hover:bg-white/10"
                 >
-                  View P-Core Dent
+                  View Dental Solution
                 </Link>
               </div>
             </div>
 
             <div className="border-t border-white/10 bg-slate-900/70 p-8 md:p-10 lg:border-l lg:border-t-0">
               <p className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">
-                Contact email
+                Development contact
               </p>
 
               <a
@@ -354,15 +399,15 @@ export default function HomePage() {
                   <p className="font-bold text-white">Integration requests</p>
                   <p className="mt-2">
                     PMS, calendar, patient data, appointment workflow, and
-                    third-party software connection inquiries.
+                    third-party dental software connection inquiries.
                   </p>
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <p className="font-bold text-white">Dental partnerships</p>
+                  <p className="font-bold text-white">Dental clinic pilots</p>
                   <p className="mt-2">
-                    Contact us about P-Core Dent demos, pilot clinics, and
-                    technical collaboration.
+                    Contact us about P-Core AI demos, pilot clinics, and dental
+                    front-desk automation workflows.
                   </p>
                 </div>
 
@@ -377,55 +422,37 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Products */}
+      {/* Final CTA */}
       <section className="mx-auto max-w-7xl px-6 pb-24">
-        <div className="mb-8">
-          <h2 className="text-3xl font-black">Products</h2>
-
-          <p className="mt-3 max-w-2xl text-slate-300">
-            P-Core AI creates specialized AI systems for different service
-            industries.
+        <div className="rounded-[2rem] border border-white/10 bg-slate-900 p-8 text-center md:p-12">
+          <p className="text-sm font-bold uppercase tracking-[0.25em] text-cyan-300">
+            P-Core AI for dental clinics
           </p>
-        </div>
 
-        <div className="grid gap-6 md:grid-cols-3">
-          <Link
-            href="/dent"
-            className="rounded-3xl border border-cyan-400/30 bg-cyan-400/10 p-6 transition hover:border-cyan-400/70 hover:bg-cyan-400/15"
-          >
-            <p className="mb-4 text-sm font-semibold text-cyan-300">
-              Available now
-            </p>
+          <h2 className="mt-4 text-3xl font-black tracking-tight md:text-5xl">
+            Dental front-desk automation, built for real clinic workflows.
+          </h2>
 
-            <h3 className="text-xl font-bold">P-Core Dent</h3>
+          <p className="mx-auto mt-5 max-w-2xl text-slate-300">
+            Answer calls, capture appointment requests, organize follow-ups, and
+            support your reception team with an AI system focused only on dental
+            clinic operations.
+          </p>
 
-            <p className="mt-3 text-slate-300">
-              AI receptionist and front-desk automation for dental clinics.
-            </p>
-          </Link>
+          <div className="mt-8 flex flex-wrap justify-center gap-4">
+            <a
+              href="mailto:PCoreAI.Dev@gmail.com"
+              className="rounded-2xl bg-cyan-400 px-6 py-3 font-bold text-slate-950 hover:bg-cyan-300"
+            >
+              Contact P-Core AI
+            </a>
 
-          <div className="rounded-3xl border border-white/10 bg-white/5 p-6 opacity-80">
-            <p className="mb-4 text-sm font-semibold text-slate-500">
-              Coming soon
-            </p>
-
-            <h3 className="text-xl font-bold">P-Core Beauty</h3>
-
-            <p className="mt-3 text-slate-300">
-              AI booking and client communication for salons and spas.
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-white/10 bg-white/5 p-6 opacity-80">
-            <p className="mb-4 text-sm font-semibold text-slate-500">
-              Coming soon
-            </p>
-
-            <h3 className="text-xl font-bold">P-Core Clinic</h3>
-
-            <p className="mt-3 text-slate-300">
-              AI communication workflows for healthcare and service clinics.
-            </p>
+            <Link
+              href="/login"
+              className="rounded-2xl border border-white/15 px-6 py-3 font-bold text-white hover:bg-white/10"
+            >
+              Clinic Login
+            </Link>
           </div>
         </div>
       </section>
@@ -437,7 +464,7 @@ export default function HomePage() {
 
           <div className="flex flex-wrap gap-5">
             <Link href="/dent" className="hover:text-slate-300">
-              P-Core Dent
+              Dental Solution
             </Link>
 
             <a
