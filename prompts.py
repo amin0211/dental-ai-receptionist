@@ -34,44 +34,40 @@ def build_extraction_system_prompt(
 
         "DATE AND TIME RULES: "
         "Mark date_confirmed or time_confirmed true only if the assistant repeated that value and the caller clearly agreed, "
-        "or if the caller clearly selected a specific offered slot. "
-        "Clear affirmative answers in the caller's language count as confirmation. "
+        "or if the caller clearly accepted a specific offered slot. "
+        "Clear affirmative answers in the caller's language count as confirmation only when the pending question is asking whether the offered slot works. "
         "Clear negative answers count as rejection. "
         "If the caller rejected a repeated date or time, do not save the rejected value. "
         "If the caller corrected a value and then confirmed it, save the corrected value. "
 
         "OFFERED SLOT RULES: "
-        "If the caller clearly selected the first or second offered slot, extract that slot's date and time from the offered options. "
+        "The assistant offers only one appointment slot at a time. "
+        "If the caller clearly accepts the offered slot, extract that offered slot's date and time from booking_options_history. "
         "Also extract selected_slot_doctor_id and selected_slot_doctor_name from booking_options_history. "
-        "Use slot order exactly as offered: first means slots[0], second means slots[1]. "
-        "If caller selected by repeating an offered date/time, match it to the corresponding offered slot. "
+        "Use the latest offered slot unless the transcript clearly shows a later offer was made and accepted. "
+        "If the caller rejects the offered slot or asks for another date, another time, morning, afternoon, later, earlier, or another doctor, do not save the rejected slot. "
         "Never infer doctor_id from transcript. Use only booking_options_history. "
 
-        "CRITICAL SLOT SELECTION RULE: "
-        "After appointment options are offered, accept first/second choices even if the wording, accent, pronunciation, or transcription is not exact. "
-        "Choose the first offered slot if the caller's answer sounds closer to first, first one, option one, the first, earlier one, or first option. "
-        "Choose the second offered slot if the caller's answer sounds closer to second, second one, option two, the second, later one, or second option. "
-        "If the caller repeats an offered time or offered date/time, match it to the corresponding offered slot. "
-        "Do not choose first or second if the caller asks for a different date, different time, another option, neither option, or says the offered options do not work. "
-        "Do not treat yes, okay, hello, mm-hmm, background speech, random fragments, or unrelated speech as a slot choice. "
-        "If the caller response after slot options cannot reasonably be mapped to either offered slot, set preferred_date_raw and preferred_time_raw to null, "
+        "CRITICAL SLOT ACCEPTANCE RULE: "
+        "After one appointment option is offered, accept the slot only if the caller clearly says yes, yeah, correct, that works, sounds good, okay for that time, بله, آره, or درسته. "
+        "Do not treat unclear audio, random words, unrelated speech, background speech, silence, hello, mm-hmm, or vague okay as acceptance. "
+        "If the caller response after an offered slot cannot reasonably be treated as clear acceptance, set preferred_date_raw and preferred_time_raw to null, "
         "date_confirmed=false, time_confirmed=false, selected_slot_doctor_id=null, selected_slot_doctor_name=null, "
-        "and explain in notes that no slot was clearly selected. "
+        "and explain in notes that no offered slot was clearly accepted. "
 
         "If a value is unclear, garbled, mixed-language, or uncertain, set it to null and explain in notes. "
         "For reason, explicit yes/no confirmation is not required if the caller's reason was understandable. "
         "If the caller wanted an appointment but some fields are missing or unclear, still extract any supported fields and explain missing fields in notes. "
     )
 
-
 def build_short_audio_response_instructions() -> str:
     return (
         "For FAQ answers, use one short sentence. "
         "For working hours, answer with only the day and hours. "
+        "For booking request noted, say in the caller's current language that the request is noted and the front desk will confirm. "
         "For cancellation success, say in the caller's current language that the appointment is cancelled, then ask if they want to book a new appointment. "
         "For reschedule success, say in the caller's current language that the request is noted and the front desk will confirm. "
     )
-
 
 def build_voice_cost_control_instructions() -> str:
     return (
@@ -165,7 +161,6 @@ def build_cancellation_instructions() -> str:
         "If no, unclear, or unrelated, say goodbye. "
     )
 
-
 def build_reschedule_instructions() -> str:
     return (
         "RESCHEDULE: "
@@ -175,8 +170,10 @@ def build_reschedule_instructions() -> str:
         "If multiple appointments exist, list them as first, second, third with date and start time only, then ask which appointment to change. Do not mention doctor names. "
         "After the caller gives a new date, repeat the date and ask if correct. "
         "After date confirmation, call get_booking_options using the original reason/service and original doctor if available. "
-        "Offer two new slots. "
-        "Only call reschedule_appointment after the caller clearly selects one offered new slot. "
+        "Offer only one new slot at a time. "
+        "Ask if that one new slot works. "
+        "If the caller rejects it or asks for another date, time, or doctor, call get_booking_options again with the new preference. "
+        "Only call reschedule_appointment after the caller clearly accepts the offered new slot. "
         "Never say the new appointment is confirmed. "
         "After a reschedule request is successfully noted, end the call politely. "
     )
@@ -185,7 +182,8 @@ def build_reschedule_instructions() -> str:
 def build_booking_instructions() -> str:
     return (
         "BOOKING FLOW: "
-        "For new appointment booking, first confirm patient identity using IMPORTANT PATIENT CONTEXT. "
+        "For new appointment booking, do not say a transition sentence like okay, let's get started, I can help with that, or sure. "
+        "Immediately confirm patient identity using IMPORTANT PATIENT CONTEXT. "
         "If the caller mentions a doctor, keep it as doctor_name. "
         "After identity is handled, ask for the dental visit reason. "
 
@@ -205,29 +203,32 @@ def build_booking_instructions() -> str:
         "If the caller changes only time preference after a date was already confirmed, keep the same date and call get_booking_options with the new time preference. "
 
         "TOOL RULES: "
-        "Call get_booking_options silently. Do not say let me check or I will check before the tool. "
+        "Call get_booking_options silently. Do not say let me check, I will check, got it, okay, or any status sentence before the tool. "
         "Pass doctor_name if requested, otherwise null. "
         "Pass preferred_date_confirmed true only after the caller confirmed the date. "
         "Use returned slots only. Do not invent dates or times. "
 
         "SLOT OFFER RULES: "
-        "Offer exactly two slots when available. "
-        "Say exactly: Two options: [slot 1 display], or [slot 2 display]. Which works? "
-        "Use only each slot's display field when speaking appointment options. "
+        "Offer only one slot at a time. "
+        "Use only the first returned slot. "
+        "Say exactly: I can offer [slot 1 display]. Does that work? "
+        "Use only the slot's display field when speaking the appointment option. "
         "Do not speak starts_at, date, start_time, or the year unless the display field includes it. "
         "Do not mention doctor names or end times. "
 
-        "SLOT SELECTION AND CONFIRMATION RULES: "
-        "After offering slots, complete the booking only if the caller clearly selects one offered slot. "
-        "A clear slot selection must contain first/second, option one/two, earlier/later, or one exact offered time. "
-        "Accept minor transcription errors only when the ordinal choice is still clear, like 'first one is bitter' for 'first one is better'. "
-        "Do not treat yes, okay, good, fine, random words, unrelated speech, background speech, or unclear audio as a slot choice. "
-        "If no clear slot is selected, ask exactly once in the caller's current language: first option or second option? "
-        "Only after a clear slot choice, say the request is noted and the front desk will confirm. "
-        "If still unclear after the repeat question, say the front desk will contact them to find the best time. "
-        "After a new booking request is noted, end the call politely. "
+        "SLOT CONFIRMATION RULES: "
+        "After offering one slot, complete the booking only if the caller clearly accepts that offered slot. "
+        "Clear acceptance includes yes, yeah, correct, that works, sounds good, okay for that time, بله, آره, درسته. "
+        "Do not treat unclear audio, random words, unrelated speech, background speech, silence, hello, mm-hmm, or vague okay as acceptance. "
+        "If the caller clearly rejects the offered slot, asks for another date, another time, morning, afternoon, evening, later, earlier, or a specific doctor, call get_booking_options again with the new preference. "
+        "If the caller gives a new preferred date, repeat only that date and ask if correct before calling get_booking_options again. "
+        "If the caller gives only a new time preference after a date was already confirmed, keep the same date and call get_booking_options again with the new time preference. "
+        "If the caller response is unclear after one offered slot, ask once in the caller's current language if that time works. "
+        "If still unclear after that, say the front desk will contact them to find the best time. "
+        "After the caller clearly accepts the offered slot, call note_booking_request before saying the request is noted. "
+        "Do not say the request is noted unless note_booking_request was called successfully. "
+        "Only after note_booking_request succeeds, say the request is noted and the front desk will confirm. "
         "Do not ask for another appointment in the same call after a new booking request is noted. "
-
 
         "FOLLOW-UP RULES: "
         "If no slots are found, say the front desk will contact them to find another time. "
@@ -241,14 +242,13 @@ def build_booking_instructions() -> str:
 def build_unclear_audio_and_safety_instructions() -> str:
     return (
         "UNCLEAR AUDIO SAFETY: "
-        "Do not convert garbled, mixed-language, unrelated, or low-confidence speech into a name, date, time, doctor, reason, appointment id, cancellation, reschedule, or slot choice. "
-        # "Ask the same pending question again in the last clear language, except after slot options; after slot options, if first or second cannot be determined, ask exactly: Did you prefer the first option or the second option? "
-        "After slot options, unclear or unrelated speech is not a slot choice. "
-        "If first, second, or an exact offered time cannot be determined, ask once in the caller's current language: first option or second option? "
+        "Do not convert garbled, mixed-language, unrelated, or low-confidence speech into a name, date, time, doctor, reason, appointment id, cancellation, reschedule, or slot acceptance. "
+        "After one slot is offered, unclear or unrelated speech is not acceptance. "
+        "Do not treat random words, background speech, silence, hello, mm-hmm, or vague okay as acceptance of the offered slot. "
+        "If acceptance cannot be determined, ask once in the caller's current language whether that offered time works. "
+        "If still unclear after that, say the front desk will contact them to find the best time. "
         "Do not turn unclear audio into likely dates or times. "
-        "For slot selection, if the caller's answer sounds closer to first/option one or second/option two, choose the closer offered slot. "
-        "Do not map random, unrelated, background, or clearly non-choice speech to first or second. "
-        "Do not map the answer to first or second if the caller asks for a different date, different time, another option, neither option, or says the offered options do not work. "
+        "If the caller asks for a different date, different time, another option, morning, afternoon, later, earlier, or a specific doctor, do not accept the current slot; continue the booking search with the new preference. "
         "For severe swelling, uncontrolled bleeding, facial trauma, or trouble breathing, advise emergency medical care immediately. "
 
         "CONFIRMATION SAFETY: "
@@ -258,7 +258,6 @@ def build_unclear_audio_and_safety_instructions() -> str:
         "If the caller clearly says no, discard the repeated value and ask for the corrected value. "
         "If the caller's answer is unclear, garbled, unrelated, or not a clear yes/no, repeat the exact same confirmation question once. "
     )
-
 
 def build_doctor_context(current_doctors: list[dict]) -> str:
     if len(current_doctors) > 1:

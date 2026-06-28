@@ -129,7 +129,7 @@ def sanitize_booking_options_for_patient(tool_result: dict) -> dict:
 
             sanitized_slots.append(clean_slot)
 
-        sanitized["slots"] = sanitized_slots
+        sanitized["slots"] = sanitized_slots[:1]
 
     sanitized["patient_facing_instruction"] = (
         "Offer only the date and time to the caller. "
@@ -446,18 +446,21 @@ async def twilio_realtime(websocket: WebSocket):
                 nonlocal end_call_task
 
                 if end_call_task:
+                    print(f"Call end already scheduled | reason={reason}")
                     return
 
-                print(f"Call end scheduled | reason={reason}")
+                print(
+                    "Call end scheduled | "
+                    f"reason={reason}, "
+                    f"current_twilio_call_sid={current_twilio_call_sid}"
+                )
 
                 async def delayed_end():
-                    # Give Twilio a short moment to play the final audio.
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(0.7)
                     await end_twilio_call(current_twilio_call_sid)
 
                 end_call_task = asyncio.create_task(delayed_end())
                 
-
             async def receive_from_twilio():
                 nonlocal stream_sid
                 nonlocal current_call_id
@@ -609,6 +612,21 @@ async def twilio_realtime(websocket: WebSocket):
                                                     "preferred_time_raw",
                                                     "preferred_date_confirmed",
                                                 ],
+                                                "additionalProperties": False,
+                                            },
+                                        },
+                                        {
+                                            "type": "function",
+                                            "name": "note_booking_request",
+                                            "description": (
+                                                "Use this only after the caller clearly accepts the single offered appointment slot. "
+                                                "This marks the new booking request as completed for after-call saving. "
+                                                "Do not use this for unclear speech, random words, rejection, cancellation, lookup, FAQ, or reschedule."
+                                            ),
+                                            "parameters": {
+                                                "type": "object",
+                                                "properties": {},
+                                                "required": [],
                                                 "additionalProperties": False,
                                             },
                                         },
@@ -957,11 +975,31 @@ async def twilio_realtime(websocket: WebSocket):
                                     appointment_details.get("time_confirmed")
                                 )
 
-                                if not date_confirmed:
-                                    preferred_date_raw = None
+                                accepted_slot = None
 
-                                if not time_confirmed:
-                                    preferred_time_raw = None
+                                if booking_options_history:
+                                    accepted_slot = booking_options_history[-1].get("accepted_slot")
+
+                                if appointment_request_write_needed and accepted_slot:
+                                    preferred_date_raw = accepted_slot.get("date")
+                                    preferred_time_raw = accepted_slot.get("start_time")
+
+                                    date_confirmed = True
+                                    time_confirmed = True
+
+                                    doctor_id = accepted_slot.get("doctor_id") or doctor_id
+                                    preferred_doctor_name = (
+                                        accepted_slot.get("doctor_name")
+                                        or accepted_slot.get("doctor_display_name")
+                                        or preferred_doctor_name
+                                    )
+
+                                else:
+                                    if not date_confirmed:
+                                        preferred_date_raw = None
+
+                                    if not time_confirmed:
+                                        preferred_time_raw = None
 
                                 preferred_time_combined = (
                                     (
@@ -1056,21 +1094,26 @@ async def twilio_realtime(websocket: WebSocket):
                                     "new" if slot_was_selected else "needs_followup"
                                 )
 
-                                booking_flow_happened = bool(
+                                accepted_slot = None
+
+                                if booking_options_history:
+                                    accepted_slot = booking_options_history[-1].get("accepted_slot")
+
+                                booking_flow_completed = bool(
                                     appointment_request_write_needed
-                                    or booking_options_history
-                                    or slot_was_selected
+                                    and accepted_slot
                                 )
 
                                 is_non_booking_management_call = bool(
                                     raw_non_booking_management_call
-                                    and not booking_flow_happened
+                                    and not booking_flow_completed
                                 )
 
                                 should_create_request = bool(
-                                    booking_flow_happened
+                                    booking_flow_completed
                                     and not is_non_booking_management_call
                                 )
+
                                 print(
                                     "Appointment request decision | "
                                     f"appointment_request_write_needed={appointment_request_write_needed}, "
@@ -1283,32 +1326,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     f"{final_ai_transcript.strip()}"
                                 )
 
-                                final_text = final_ai_transcript.strip()
-                                final_text_lower = final_text.lower()
-
-                                booking_final_message_detected = (
-                                    appointment_request_write_needed
-                                    and booking_options_history
-                                    and (
-                                        "request is noted" in final_text_lower
-                                        or "front desk will confirm" in final_text_lower
-                                        or "front desk will contact" in final_text_lower
-                                        or "درخواست" in final_text
-                                        or "پذیرش" in final_text
-                                        or "ثبت شد" in final_text
-                                    )
-                                )
-
-                                goodbye_detected = (
-                                    final_text_lower in ["goodbye", "goodbye.", "bye", "bye."]
-                                    or "خداحافظ" in final_text
-                                )
-
-                                if booking_final_message_detected or goodbye_detected:
-                                    end_call_requested = True
-
                             ai_transcript_buffer = ""
-
                         elif event_type == "response.function_call_arguments.done":
                             tool_name = response.get("name")
                             tool_call_id = response.get("call_id")
@@ -1326,7 +1344,6 @@ async def twilio_realtime(websocket: WebSocket):
                                     print(f"Failed to parse tool arguments: {e}")
                                     args = {}
 
-                                appointment_request_write_needed = True
 
                                 tool_started_at = time.perf_counter()
 
@@ -1387,6 +1404,69 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 await create_short_audio_response()
+                            elif tool_name == "note_booking_request":
+                                selected_slot = None
+
+                                if booking_options_history:
+                                    last_offer = booking_options_history[-1]
+                                    slots = last_offer.get("slots") or []
+
+                                    if slots:
+                                        selected_slot = slots[0]
+                                        last_offer["accepted_slot"] = selected_slot
+
+                                if selected_slot:
+                                    appointment_request_write_needed = True
+                                    end_call_requested = True
+
+                                    tool_result = {
+                                        "ok": True,
+                                        "status": "booking_request_noted",
+                                        "message_for_ai": (
+                                            "Tell the caller the request is noted and the front desk will confirm."
+                                        ),
+                                    }
+
+                                    print(
+                                        "Booking request completed by workflow | "
+                                        f"accepted_slot={selected_slot}, "
+                                        f"appointment_request_write_needed={appointment_request_write_needed}, "
+                                        f"end_call_requested={end_call_requested}, "
+                                        f"current_twilio_call_sid={current_twilio_call_sid}"
+                                    )
+
+                                else:
+                                    tool_result = {
+                                        "ok": False,
+                                        "status": "selected_slot_not_found",
+                                        "message_for_ai": (
+                                            "Say the front desk will contact them to find the best time."
+                                        ),
+                                    }
+
+                                    print(
+                                        "note_booking_request failed | "
+                                        f"booking_options_history_count={len(booking_options_history)}"
+                                    )
+
+                                await openai_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "conversation.item.create",
+                                            "item": {
+                                                "type": "function_call_output",
+                                                "call_id": tool_call_id,
+                                                "output": json.dumps(
+                                                    tool_result,
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        }
+                                    )
+                                )
+
+                                await create_short_audio_response()
+
                             elif tool_name == "get_faq_answer":
                                 try:
                                     args = json.loads(arguments_raw)
@@ -1579,7 +1659,7 @@ async def twilio_realtime(websocket: WebSocket):
 
                             else:
                                 print(f"Unknown realtime tool requested: {tool_name}")
-
+                                
                         elif event_type == "response.done":
                             current_response_id = None
 
@@ -1599,14 +1679,20 @@ async def twilio_realtime(websocket: WebSocket):
                                 update_call_func=update_call,
                                 model=OPENAI_REALTIME_MODEL,
                             )
+
                             if end_call_requested:
-                                await schedule_call_end("final_action_completed")
+                                print(
+                                    "Response done with end_call_requested=True | "
+                                    f"current_twilio_call_sid={current_twilio_call_sid}"
+                                )
+                                await schedule_call_end("workflow_completed")
 
                         elif event_type == "error":
                             print(f"OpenAI error: {response}")
 
                         else:
                             print(f"OpenAI event: {event_type}")
+
 
                 except Exception as e:
                     print(f"OpenAI receive error: {e}")
