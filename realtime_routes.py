@@ -1238,6 +1238,13 @@ async def twilio_realtime(websocket: WebSocket):
                         elif event_type == "input_audio_buffer.speech_started":
                             print("OpenAI event: input_audio_buffer.speech_started")
 
+                            if end_call_requested:
+                                print(
+                                    "Ignoring caller speech because call end is already requested | "
+                                    f"current_twilio_call_sid={current_twilio_call_sid}"
+                                )
+                                continue
+
                             if current_response_id:
                                 try:
                                     await openai_ws.send(
@@ -1263,7 +1270,7 @@ async def twilio_realtime(websocket: WebSocket):
                                     )
                                 )
                                 print("Sent Twilio clear event")
-                                
+                   
                         elif event_type == "input_audio_buffer.speech_stopped":
                             print("OpenAI event: input_audio_buffer.speech_stopped")
 
@@ -1404,6 +1411,7 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 await create_short_audio_response()
+
                             elif tool_name == "note_booking_request":
                                 selected_slot = None
 
@@ -1466,6 +1474,8 @@ async def twilio_realtime(websocket: WebSocket):
                                 )
 
                                 await create_short_audio_response()
+                                if end_call_requested:
+                                    await schedule_call_end("booking_request_completed")
 
                             elif tool_name == "get_faq_answer":
                                 try:
@@ -1659,7 +1669,7 @@ async def twilio_realtime(websocket: WebSocket):
 
                             else:
                                 print(f"Unknown realtime tool requested: {tool_name}")
-                                
+
                         elif event_type == "response.done":
                             current_response_id = None
 
