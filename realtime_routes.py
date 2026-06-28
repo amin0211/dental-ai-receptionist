@@ -396,6 +396,7 @@ async def twilio_realtime(websocket: WebSocket):
 
     stream_sid = None
     current_call_id = None
+    current_twilio_call_sid = None
     current_response_id = None
     transcript_parts = []
     ai_transcript_buffer = ""

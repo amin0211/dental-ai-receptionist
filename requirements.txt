@@ -4,3 +4,4 @@ supabase
 openai
 websockets
 python-multipart
+twilio
