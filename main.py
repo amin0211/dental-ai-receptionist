@@ -8,6 +8,7 @@ from supabase import create_client, Client
 from config import PUBLIC_WS_URL
 from realtime_routes import router as realtime_router
 from fastapi.middleware.cors import CORSMiddleware
+from pms_routes import router as pms_router
 
 from supabase_service import (
     normalize_phone,
@@ -29,6 +30,7 @@ app.add_middleware(
 )
 app.include_router(faq_audio_router)
 app.include_router(realtime_router)
+app.include_router(pms_router)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
