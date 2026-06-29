@@ -3124,6 +3124,14 @@ def upsert_pms_patient(
 
     existing_rows = existing_result.data or []
 
+    full_name = " ".join(
+        part for part in [
+            patient.get("first_name"),
+            patient.get("last_name"),
+        ]
+        if part
+    ).strip()
+
     payload = {
         "clinic_id": clinic_id,
         "pms_connection_id": pms_connection_id,
@@ -3134,14 +3142,15 @@ def upsert_pms_patient(
         "last_pulled_at": now_iso,
         "last_sync_error": None,
         "external_raw": patient.get("raw") or patient,
-        "first_name": patient.get("first_name"),
-        "last_name": patient.get("last_name"),
-        "preferred_name": patient.get("preferred_name"),
-        "phone": patient.get("phone"),
+
+        "full_name": full_name or patient.get("preferred_name") or "Unknown Patient",
+        "phone_primary": patient.get("phone"),
         "email": patient.get("email"),
-        "birthdate": patient.get("birthdate"),
+        "date_of_birth": patient.get("birthdate"),
+
         "status": patient.get("status") or "active",
     }
+
 
     if existing_rows:
         patient_id = existing_rows[0]["id"]
