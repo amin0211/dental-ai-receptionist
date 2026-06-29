@@ -1,5 +1,6 @@
 from typing import Any
 
+from pms.mock_client import MockPmsClient
 from pms.open_dental_client import OpenDentalClient
 
 
@@ -10,23 +11,14 @@ class UnsupportedPmsError(Exception):
 def get_pms_client_from_connection(connection: dict[str, Any]):
     """
     Build the correct PMS client from a pms_connections row.
-
-    Expected connection example:
-    {
-        "id": "...",
-        "clinic_id": "...",
-        "pms_type": "open_dental",
-        "base_url": "https://api.opendental.com/api/v1",
-        "credentials": {
-            "customer_key": "..."
-        }
-    }
     """
 
     pms_type = connection.get("pms_type")
     base_url = connection.get("base_url")
-
     credentials = connection.get("credentials") or {}
+
+    if pms_type == "mock":
+        return MockPmsClient()
 
     if pms_type == "open_dental":
         customer_key = credentials.get("customer_key")
