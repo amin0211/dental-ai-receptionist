@@ -3092,3 +3092,110 @@ def mark_pms_connection_error(connection_id: str, error_message: str) -> None:
         .eq("id", connection_id)
         .execute()
     )
+
+    from datetime import datetime, timezone
+from typing import Any
+
+
+def upsert_pms_patient(
+    clinic_id: str,
+    pms_connection_id: str,
+    pms_type: str,
+    patient: dict[str, Any],
+) -> dict[str, Any]:
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    external_id = patient.get("id")
+    if not external_id:
+        raise ValueError("PMS patient is missing external id")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    existing_result = (
+        supabase.table("patients")
+        .select("id")
+        .eq("clinic_id", clinic_id)
+        .eq("pms_connection_id", pms_connection_id)
+        .eq("external_id", external_id)
+        .limit(1)
+        .execute()
+    )
+
+    existing_rows = existing_result.data or []
+
+    payload = {
+        "clinic_id": clinic_id,
+        "pms_connection_id": pms_connection_id,
+        "pms_type": pms_type,
+        "external_id": external_id,
+        "sync_status": "synced",
+        "last_synced_at": now_iso,
+        "last_pulled_at": now_iso,
+        "last_sync_error": None,
+        "external_raw": patient.get("raw") or patient,
+        "first_name": patient.get("first_name"),
+        "last_name": patient.get("last_name"),
+        "preferred_name": patient.get("preferred_name"),
+        "phone": patient.get("phone"),
+        "email": patient.get("email"),
+        "birthdate": patient.get("birthdate"),
+        "status": patient.get("status") or "active",
+    }
+
+    if existing_rows:
+        patient_id = existing_rows[0]["id"]
+
+        result = (
+            supabase.table("patients")
+            .update(payload)
+            .eq("id", patient_id)
+            .execute()
+        )
+
+        rows = result.data or []
+        return rows[0] if rows else {"id": patient_id, **payload}
+
+    result = (
+        supabase.table("patients")
+        .insert(payload)
+        .execute()
+    )
+
+    rows = result.data or []
+    return rows[0] if rows else payload
+
+
+def import_pms_patients_to_db(
+    clinic_id: str,
+    connection: dict[str, Any],
+    patients: list[dict[str, Any]],
+) -> dict[str, Any]:
+    imported = []
+    failed = []
+
+    pms_connection_id = connection["id"]
+    pms_type = connection["pms_type"]
+
+    for patient in patients:
+        try:
+            saved_patient = upsert_pms_patient(
+                clinic_id=clinic_id,
+                pms_connection_id=pms_connection_id,
+                pms_type=pms_type,
+                patient=patient,
+            )
+            imported.append(saved_patient)
+
+        except Exception as e:
+            failed.append({
+                "patient": patient,
+                "error": str(e),
+            })
+
+    return {
+        "imported_count": len(imported),
+        "failed_count": len(failed),
+        "imported": imported,
+        "failed": failed,
+    }
