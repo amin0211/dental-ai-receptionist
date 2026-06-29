@@ -5,3 +5,4 @@ openai
 websockets
 python-multipart
 twilio
+httpx

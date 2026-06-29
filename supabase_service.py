@@ -2,6 +2,9 @@ import os
 from supabase import create_client, Client
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
+from typing import Any
+
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -3032,3 +3035,60 @@ def build_patient_options_for_ai(patients: list[dict]) -> list[dict]:
         )
 
     return options
+
+
+
+def get_active_pms_connection_for_clinic(clinic_id: str) -> dict[str, Any] | None:
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    result = (
+        supabase.table("pms_connections")
+        .select("*")
+        .eq("clinic_id", clinic_id)
+        .eq("is_active", True)
+        .eq("sync_enabled", True)
+        .limit(1)
+        .execute()
+    )
+
+    rows = result.data or []
+    if not rows:
+        return None
+
+    return rows[0]
+
+
+def mark_pms_connection_success(connection_id: str) -> None:
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    (
+        supabase.table("pms_connections")
+        .update({
+            "last_connected_at": now_iso,
+            "last_error": None,
+            "updated_at": now_iso,
+        })
+        .eq("id", connection_id)
+        .execute()
+    )
+
+
+def mark_pms_connection_error(connection_id: str, error_message: str) -> None:
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    (
+        supabase.table("pms_connections")
+        .update({
+            "last_error": error_message,
+            "updated_at": now_iso,
+        })
+        .eq("id", connection_id)
+        .execute()
+    )
