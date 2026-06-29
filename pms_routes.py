@@ -78,7 +78,7 @@ async def test_pms_connection(clinic_id: str):
         }
     
 
-    @router.post("/import-patients/{clinic_id}")
+@router.post("/import-patients/{clinic_id}")
 async def import_pms_patients(clinic_id: str, limit: int = 50):
     connection = get_active_pms_connection_for_clinic(clinic_id)
 
