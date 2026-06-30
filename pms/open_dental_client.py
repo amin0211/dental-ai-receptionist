@@ -81,6 +81,50 @@ class OpenDentalClient(PmsClient):
 
         return response_body
 
+
+    def normalize_patient(self, raw_patient: dict[str, Any]) -> dict[str, Any]:
+        pat_num = raw_patient.get("PatNum")
+
+        phone_primary = (
+            raw_patient.get("WirelessPhone")
+            or raw_patient.get("HmPhone")
+            or raw_patient.get("WkPhone")
+            or ""
+        )
+
+        phone_secondary = (
+            raw_patient.get("HmPhone")
+            if raw_patient.get("WirelessPhone")
+            else raw_patient.get("WkPhone")
+        )
+
+        pat_status = raw_patient.get("PatStatus") or "Patient"
+
+        if pat_status == "Patient":
+            status = "active"
+        else:
+            status = str(pat_status).lower()
+
+        return {
+            "id": str(pat_num) if pat_num is not None else None,
+            "first_name": raw_patient.get("FName") or "",
+            "last_name": raw_patient.get("LName") or "",
+            "preferred_name": raw_patient.get("Preferred") or "",
+            "phone": phone_primary,
+            "phone_secondary": phone_secondary or None,
+            "email": raw_patient.get("Email") or None,
+            "birthdate": raw_patient.get("Birthdate") or None,
+            "status": status,
+            "address_line1": raw_patient.get("Address") or None,
+            "address_line2": raw_patient.get("Address2") or None,
+            "city": raw_patient.get("City") or None,
+            "province": raw_patient.get("State") or None,
+            "postal_code": raw_patient.get("Zip") or None,
+            "country": "USA",
+            "raw": raw_patient,
+        }
+    
+
     async def test_connection(self) -> dict[str, Any]:
         data = await self.request(
             method="GET",
@@ -95,12 +139,14 @@ class OpenDentalClient(PmsClient):
             "sample_response": data,
         }
 
-    async def list_patients(self, limit: int = 50) -> Any:
-        return await self.request(
+    async def list_patients(self, limit: int = 50) -> list[dict[str, Any]]:
+        raw_patients = await self.request(
             method="GET",
             path="/patients",
             params={"Limit": limit},
         )
+
+        return [self.normalize_patient(patient) for patient in raw_patients]
 
     async def get_patient(self, external_patient_id: str) -> Any:
         return await self.request(

@@ -3093,9 +3093,6 @@ def mark_pms_connection_error(connection_id: str, error_message: str) -> None:
         .execute()
     )
 
-    from datetime import datetime, timezone
-from typing import Any
-
 
 def upsert_pms_patient(
     clinic_id: str,
@@ -3124,13 +3121,16 @@ def upsert_pms_patient(
 
     existing_rows = existing_result.data or []
 
+    first_name = patient.get("first_name") or ""
+    last_name = patient.get("last_name") or ""
+    preferred_name = patient.get("preferred_name") or ""
+
     full_name = " ".join(
-        part for part in [
-            patient.get("first_name"),
-            patient.get("last_name"),
-        ]
-        if part
+        part for part in [first_name, last_name] if part
     ).strip()
+
+    if not full_name:
+        full_name = preferred_name or "Unknown Patient"
 
     payload = {
         "clinic_id": clinic_id,
@@ -3143,14 +3143,26 @@ def upsert_pms_patient(
         "last_sync_error": None,
         "external_raw": patient.get("raw") or patient,
 
-        "full_name": full_name or patient.get("preferred_name") or "Unknown Patient",
-        "phone_primary": patient.get("phone"),
+        "full_name": full_name,
+        "first_name": first_name or None,
+        "last_name": last_name or None,
+        "preferred_name": preferred_name or None,
+
+        "phone_primary": patient.get("phone") or "",
+        "phone_secondary": patient.get("phone_secondary"),
         "email": patient.get("email"),
         "date_of_birth": patient.get("birthdate"),
 
-        "status": patient.get("status") or "active",
-    }
+        "address_line1": patient.get("address_line1"),
+        "address_line2": patient.get("address_line2"),
+        "city": patient.get("city"),
+        "province": patient.get("province"),
+        "postal_code": patient.get("postal_code"),
+        "country": patient.get("country") or "Canada",
 
+        "status": patient.get("status") or "active",
+        "updated_at": now_iso,
+    }
 
     if existing_rows:
         patient_id = existing_rows[0]["id"]
