@@ -1,8 +1,8 @@
 import os
+
 from supabase import create_client, Client
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
-from datetime import datetime, timezone
 from typing import Any
 
 
@@ -3037,7 +3037,6 @@ def build_patient_options_for_ai(patients: list[dict]) -> list[dict]:
     return options
 
 
-
 def get_active_pms_connection_for_clinic(clinic_id: str) -> dict[str, Any] | None:
     if supabase is None:
         raise RuntimeError("Supabase client is not initialized")
@@ -3053,6 +3052,7 @@ def get_active_pms_connection_for_clinic(clinic_id: str) -> dict[str, Any] | Non
     )
 
     rows = result.data or []
+
     if not rows:
         return None
 
@@ -3067,11 +3067,13 @@ def mark_pms_connection_success(connection_id: str) -> None:
 
     (
         supabase.table("pms_connections")
-        .update({
-            "last_connected_at": now_iso,
-            "last_error": None,
-            "updated_at": now_iso,
-        })
+        .update(
+            {
+                "last_connected_at": now_iso,
+                "last_error": None,
+                "updated_at": now_iso,
+            }
+        )
         .eq("id", connection_id)
         .execute()
     )
@@ -3085,41 +3087,207 @@ def mark_pms_connection_error(connection_id: str, error_message: str) -> None:
 
     (
         supabase.table("pms_connections")
-        .update({
-            "last_error": error_message,
-            "updated_at": now_iso,
-        })
+        .update(
+            {
+                "last_error": error_message,
+                "updated_at": now_iso,
+            }
+        )
         .eq("id", connection_id)
         .execute()
     )
 
 
-def upsert_pms_patient(
+def get_pms_sync_state(
     clinic_id: str,
     pms_connection_id: str,
-    pms_type: str,
-    patient: dict[str, Any],
-) -> dict[str, Any]:
+    resource: str,
+) -> dict[str, Any] | None:
     if supabase is None:
         raise RuntimeError("Supabase client is not initialized")
 
-    external_id = patient.get("id")
-    if not external_id:
-        raise ValueError("PMS patient is missing external id")
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    existing_result = (
-        supabase.table("patients")
-        .select("id")
+    result = (
+        supabase.table("pms_sync_state")
+        .select("*")
         .eq("clinic_id", clinic_id)
         .eq("pms_connection_id", pms_connection_id)
-        .eq("external_id", external_id)
+        .eq("resource", resource)
         .limit(1)
         .execute()
     )
 
-    existing_rows = existing_result.data or []
+    rows = result.data or []
+
+    if not rows:
+        return None
+
+    return rows[0]
+
+
+def mark_pms_sync_started(
+    clinic_id: str,
+    pms_connection_id: str,
+    resource: str,
+) -> dict[str, Any]:
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    existing = get_pms_sync_state(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        resource=resource,
+    )
+
+    if existing:
+        result = (
+            supabase.table("pms_sync_state")
+            .update(
+                {
+                    "last_started_at": now_iso,
+                    "last_error": None,
+                    "updated_at": now_iso,
+                }
+            )
+            .eq("id", existing["id"])
+            .execute()
+        )
+
+        rows = result.data or []
+        return rows[0] if rows else existing
+
+    result = (
+        supabase.table("pms_sync_state")
+        .insert(
+            {
+                "clinic_id": clinic_id,
+                "pms_connection_id": pms_connection_id,
+                "resource": resource,
+                "cursor": {},
+                "last_started_at": now_iso,
+                "last_error": None,
+                "updated_at": now_iso,
+            }
+        )
+        .execute()
+    )
+
+    rows = result.data or []
+    return rows[0]
+
+
+def mark_pms_sync_success(
+    clinic_id: str,
+    pms_connection_id: str,
+    resource: str,
+    cursor: dict[str, Any],
+) -> None:
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    existing = get_pms_sync_state(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        resource=resource,
+    )
+
+    payload = {
+        "clinic_id": clinic_id,
+        "pms_connection_id": pms_connection_id,
+        "resource": resource,
+        "cursor": cursor,
+        "last_completed_at": now_iso,
+        "last_success_at": now_iso,
+        "last_error": None,
+        "updated_at": now_iso,
+    }
+
+    if existing:
+        (
+            supabase.table("pms_sync_state")
+            .update(payload)
+            .eq("id", existing["id"])
+            .execute()
+        )
+        return
+
+    (
+        supabase.table("pms_sync_state")
+        .insert(payload)
+        .execute()
+    )
+
+
+def mark_pms_sync_error(
+    clinic_id: str,
+    pms_connection_id: str,
+    resource: str,
+    error_message: str,
+) -> None:
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    existing = get_pms_sync_state(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        resource=resource,
+    )
+
+    payload = {
+        "last_completed_at": now_iso,
+        "last_error": error_message,
+        "updated_at": now_iso,
+    }
+
+    if existing:
+        (
+            supabase.table("pms_sync_state")
+            .update(payload)
+            .eq("id", existing["id"])
+            .execute()
+        )
+        return
+
+    (
+        supabase.table("pms_sync_state")
+        .insert(
+            {
+                "clinic_id": clinic_id,
+                "pms_connection_id": pms_connection_id,
+                "resource": resource,
+                "cursor": {},
+                **payload,
+            }
+        )
+        .execute()
+    )
+
+
+def build_pms_patient_payload(
+    clinic_id: str,
+    pms_connection_id: str,
+    pms_type: str,
+    patient: dict[str, Any],
+    now_iso: str,
+) -> dict[str, Any]:
+    """
+    Converts one normalized PMS patient into our patients table payload.
+
+    This function does not decide whether the patient changed.
+    That decision belongs to each PMS-specific sync strategy.
+    """
+
+    external_id = patient.get("id")
+
+    if external_id is None or str(external_id).strip() == "":
+        raise ValueError("PMS patient is missing external id")
+
+    external_id = str(external_id)
 
     first_name = patient.get("first_name") or ""
     last_name = patient.get("last_name") or ""
@@ -3132,11 +3300,15 @@ def upsert_pms_patient(
     if not full_name:
         full_name = preferred_name or "Unknown Patient"
 
-    payload = {
+    return {
         "clinic_id": clinic_id,
         "pms_connection_id": pms_connection_id,
         "pms_type": pms_type,
         "external_id": external_id,
+
+        "external_hash": patient.get("external_hash"),
+        "pms_updated_at": patient.get("pms_updated_at"),
+
         "sync_status": "synced",
         "last_synced_at": now_iso,
         "last_pulled_at": now_iso,
@@ -3164,27 +3336,9 @@ def upsert_pms_patient(
         "updated_at": now_iso,
     }
 
-    if existing_rows:
-        patient_id = existing_rows[0]["id"]
 
-        result = (
-            supabase.table("patients")
-            .update(payload)
-            .eq("id", patient_id)
-            .execute()
-        )
-
-        rows = result.data or []
-        return rows[0] if rows else {"id": patient_id, **payload}
-
-    result = (
-        supabase.table("patients")
-        .insert(payload)
-        .execute()
-    )
-
-    rows = result.data or []
-    return rows[0] if rows else payload
+def chunk_list(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
 
 
 def import_pms_patients_to_db(
@@ -3192,31 +3346,79 @@ def import_pms_patients_to_db(
     connection: dict[str, Any],
     patients: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    imported = []
-    failed = []
+    """
+    Bulk upserts normalized PMS patients into patients table.
+
+    This function expects patients to already be selected by PMS-specific logic.
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     pms_connection_id = connection["id"]
     pms_type = connection["pms_type"]
 
+    payloads: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
     for patient in patients:
         try:
-            saved_patient = upsert_pms_patient(
+            payload = build_pms_patient_payload(
                 clinic_id=clinic_id,
                 pms_connection_id=pms_connection_id,
                 pms_type=pms_type,
                 patient=patient,
+                now_iso=now_iso,
             )
-            imported.append(saved_patient)
+
+            payloads.append(payload)
 
         except Exception as e:
-            failed.append({
-                "patient": patient,
-                "error": str(e),
-            })
+            failed.append(
+                {
+                    "patient": patient,
+                    "error": str(e),
+                }
+            )
+
+    if not payloads:
+        return {
+            "imported_count": 0,
+            "failed_count": len(failed),
+            "total_payloads": 0,
+            "imported": [],
+            "failed": failed,
+        }
+
+    imported_rows: list[dict[str, Any]] = []
+
+    for payload_batch in chunk_list(payloads, 500):
+        try:
+            result = (
+                supabase.table("patients")
+                .upsert(
+                    payload_batch,
+                    on_conflict="clinic_id,pms_connection_id,external_id",
+                )
+                .execute()
+            )
+
+            imported_rows.extend(result.data or [])
+
+        except Exception as e:
+            failed.append(
+                {
+                    "batch_size": len(payload_batch),
+                    "error": str(e),
+                }
+            )
 
     return {
-        "imported_count": len(imported),
+        "imported_count": len(payloads),
         "failed_count": len(failed),
-        "imported": imported,
+        "total_payloads": len(payloads),
+        "imported": imported_rows,
         "failed": failed,
     }

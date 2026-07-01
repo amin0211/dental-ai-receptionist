@@ -16,14 +16,14 @@ OPEN_DENTAL_DEVELOPER_KEY = os.environ.get("OPEN_DENTAL_DEVELOPER_KEY")
 
 class OpenDentalClient(PmsClient):
     """
-    Client for Open Dental REST API.
+    Open Dental REST API client.
 
-    ثابت‌های شرکت:
+    Company-level values:
     - OPEN_DENTAL_BASE_URL
     - OPEN_DENTAL_DEVELOPER_KEY
 
-    مخصوص هر کلینیک:
-    - customer_key از pms_connections.credentials
+    Per-clinic value:
+    - customer_key from pms_connections.credentials
     """
 
     def __init__(
@@ -58,7 +58,7 @@ class OpenDentalClient(PmsClient):
     ) -> Any:
         url = f"{self.base_url}/{path.lstrip('/')}"
 
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=45) as client:
             response = await client.request(
                 method=method,
                 url=url,
@@ -81,8 +81,19 @@ class OpenDentalClient(PmsClient):
 
         return response_body
 
-
     def normalize_patient(self, raw_patient: dict[str, Any]) -> dict[str, Any]:
+        """
+        Converts Open Dental patient object into our normalized PMS patient format.
+
+        Open Dental:
+        - PatNum -> id
+        - FName -> first_name
+        - LName -> last_name
+        - Preferred -> preferred_name
+        - Birthdate -> birthdate
+        - DateTStamp -> pms_updated_at
+        """
+
         pat_num = raw_patient.get("PatNum")
 
         phone_primary = (
@@ -92,67 +103,162 @@ class OpenDentalClient(PmsClient):
             or ""
         )
 
-        phone_secondary = (
-            raw_patient.get("HmPhone")
-            if raw_patient.get("WirelessPhone")
-            else raw_patient.get("WkPhone")
-        )
+        phone_secondary = None
+
+        if raw_patient.get("WirelessPhone"):
+            phone_secondary = raw_patient.get("HmPhone") or raw_patient.get("WkPhone")
+        else:
+            phone_secondary = raw_patient.get("WkPhone")
 
         pat_status = raw_patient.get("PatStatus") or "Patient"
 
-        if pat_status == "Patient":
+        if str(pat_status).lower() == "patient":
             status = "active"
         else:
             status = str(pat_status).lower()
 
         return {
             "id": str(pat_num) if pat_num is not None else None,
+
             "first_name": raw_patient.get("FName") or "",
             "last_name": raw_patient.get("LName") or "",
             "preferred_name": raw_patient.get("Preferred") or "",
+
             "phone": phone_primary,
             "phone_secondary": phone_secondary or None,
             "email": raw_patient.get("Email") or None,
             "birthdate": raw_patient.get("Birthdate") or None,
+
             "status": status,
+
             "address_line1": raw_patient.get("Address") or None,
             "address_line2": raw_patient.get("Address2") or None,
             "city": raw_patient.get("City") or None,
             "province": raw_patient.get("State") or None,
             "postal_code": raw_patient.get("Zip") or None,
             "country": "USA",
+
+            # Open Dental change timestamp.
+            # This is what we use for incremental sync.
+            "pms_updated_at": raw_patient.get("DateTStamp"),
+
             "raw": raw_patient,
         }
-    
 
     async def test_connection(self) -> dict[str, Any]:
+        """
+        Test API access using the faster patient list endpoint.
+        """
+
         data = await self.request(
             method="GET",
-            path="/patients",
-            params={"Limit": 1},
+            path="/patients/Simple",
+            params={"Offset": 0},
         )
+
+        sample = data[:1] if isinstance(data, list) else data
 
         return {
             "ok": True,
             "pms_type": "open_dental",
             "base_url": self.base_url,
-            "sample_response": data,
+            "sample_response": sample,
         }
 
-    async def list_patients(self, limit: int = 50) -> list[dict[str, Any]]:
-        raw_patients = await self.request(
-            method="GET",
-            path="/patients",
-            params={"Limit": limit},
+    async def list_patients(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        date_tstamp: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Backward-compatible simple patient list.
+
+        Used by the current /pms/import-patients route.
+        For real sync, prefer list_patients_page().
+        """
+
+        page = await self.list_patients_page(
+            offset=offset,
+            date_tstamp=date_tstamp,
         )
 
-        return [self.normalize_patient(patient) for patient in raw_patients]
+        return page["patients"][:limit]
 
-    async def get_patient(self, external_patient_id: str) -> Any:
-        return await self.request(
+    async def list_patients_page(
+        self,
+        offset: int = 0,
+        date_tstamp: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Reads one page of patients from Open Dental.
+
+        Uses:
+        - /patients/Simple
+        - Offset for paging
+        - DateTStamp for incremental sync
+
+        Returns normalized patients plus paging/cursor metadata.
+        """
+
+        params: dict[str, Any] = {
+            "Offset": offset,
+        }
+
+        if date_tstamp:
+            params["DateTStamp"] = date_tstamp
+
+        raw_patients = await self.request(
+            method="GET",
+            path="/patients/Simple",
+            params=params,
+        )
+
+        if not isinstance(raw_patients, list):
+            raw_patients = []
+
+        patients = [
+            self.normalize_patient(raw_patient)
+            for raw_patient in raw_patients
+        ]
+
+        pms_updated_values = [
+            patient.get("pms_updated_at")
+            for patient in patients
+            if patient.get("pms_updated_at")
+        ]
+
+        max_pms_updated_at = (
+            max(pms_updated_values)
+            if pms_updated_values
+            else None
+        )
+
+        raw_count = len(raw_patients)
+
+        return {
+            "patients": patients,
+            "raw_count": raw_count,
+            "offset": offset,
+            "next_offset": offset + raw_count,
+            "has_more": raw_count > 0,
+            "max_pms_updated_at": max_pms_updated_at,
+            "date_tstamp": date_tstamp,
+        }
+
+    async def get_patient(self, external_patient_id: str) -> dict[str, Any]:
+        raw_patient = await self.request(
             method="GET",
             path=f"/patients/{external_patient_id}",
         )
+
+        if not isinstance(raw_patient, dict):
+            return {
+                "id": external_patient_id,
+                "raw": raw_patient,
+            }
+
+        return self.normalize_patient(raw_patient)
 
     async def list_appointments(
         self,
@@ -160,7 +266,9 @@ class OpenDentalClient(PmsClient):
         date_end: str | None = None,
         limit: int = 50,
     ) -> Any:
-        params: dict[str, Any] = {"Limit": limit}
+        params: dict[str, Any] = {
+            "Limit": limit,
+        }
 
         if date_start:
             params["DateStart"] = date_start
