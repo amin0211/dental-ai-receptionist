@@ -4339,12 +4339,18 @@ def build_pms_appointment_payload(
 
     service_name = appointment.get("service_name") or appointment.get("reason")
 
+    service_category_id = get_service_category_id_for_pms_appointment(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        service_name=service_name,
+    )
+
     return {
         "clinic_id": clinic_id,
         "doctor_id": doctor_id,
         "patient_id": patient_id,
 
-        "service_category_id": None,
+        "service_category_id": service_category_id,
         "service_name": service_name,
         "reason": appointment.get("reason") or service_name,
         "urgency": appointment.get("urgency") or "normal",
@@ -4499,3 +4505,71 @@ def replace_pms_appointments_for_date_range(
         "total_payloads": import_result["total_payloads"],
         "failed": import_result["failed"],
     }
+
+def get_service_category_id_for_pms_appointment(
+    clinic_id: str,
+    pms_connection_id: str,
+    service_name: str | None,
+) -> str | None:
+    """
+    Tries to map an Open Dental appointment procedure description
+    to our service_categories row.
+
+    Examples:
+    - ProcDescript = "SRP"
+    - ProcDescript = "Flo, Ex, Pro"
+    - ProcDescript = "Ext, Ext"
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    if not service_name:
+        return None
+
+    text = str(service_name).strip()
+
+    if not text:
+        return None
+
+    # First: exact code/name match.
+    result = (
+        supabase.table("service_categories")
+        .select("id, name, code")
+        .eq("clinic_id", clinic_id)
+        .eq("pms_connection_id", pms_connection_id)
+        .or_(f"code.eq.{text},name.eq.{text}")
+        .limit(1)
+        .execute()
+    )
+
+    rows = result.data or []
+
+    if rows:
+        return rows[0]["id"]
+
+    # Second: if ProcDescript has multiple parts like "Flo, Ex, Pro",
+    # try each part against code/name.
+    parts = [
+        part.strip()
+        for part in text.split(",")
+        if part.strip()
+    ]
+
+    for part in parts:
+        result = (
+            supabase.table("service_categories")
+            .select("id, name, code")
+            .eq("clinic_id", clinic_id)
+            .eq("pms_connection_id", pms_connection_id)
+            .or_(f"code.eq.{part},name.eq.{part}")
+            .limit(1)
+            .execute()
+        )
+
+        rows = result.data or []
+
+        if rows:
+            return rows[0]["id"]
+
+    return None
