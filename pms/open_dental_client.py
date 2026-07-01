@@ -310,14 +310,193 @@ class OpenDentalClient(PmsClient):
 
         return self.normalize_patient(raw_patient)
 
+    def parse_open_dental_appointment_datetime(
+        self,
+        value: str | None,
+    ) -> str | None:
+        """
+        Converts Open Dental appointment datetime to ISO-like string.
+
+        Example:
+        2026-07-01 09:00:00 -> 2026-07-01T09:00:00
+        """
+
+        if not value:
+            return None
+
+        text = str(value).strip()
+
+        if not text:
+            return None
+
+        if "T" in text:
+            return text.replace("Z", "")
+
+        if " " in text:
+            return text.replace(" ", "T", 1)
+
+        return text
+
+
+    def parse_open_dental_appointment_duration_minutes(
+        self,
+        raw_appointment: dict[str, Any],
+    ) -> int:
+        """
+        Estimates appointment duration from Open Dental appointment fields.
+
+        Common Open Dental field:
+        - Pattern: appointment time pattern. For MVP we treat each pattern char as 5 minutes.
+
+        Fallback:
+        - 30 minutes
+        """
+
+        # Some APIs may return explicit duration fields.
+        explicit_values = [
+            raw_appointment.get("Duration"),
+            raw_appointment.get("duration"),
+            raw_appointment.get("Length"),
+            raw_appointment.get("length"),
+            raw_appointment.get("Minutes"),
+            raw_appointment.get("minutes"),
+        ]
+
+        for value in explicit_values:
+            try:
+                if value is not None and int(value) > 0:
+                    return int(value)
+            except Exception:
+                pass
+
+        pattern = raw_appointment.get("Pattern")
+
+        if pattern:
+            pattern_text = str(pattern).strip()
+
+            # Ignore whitespace. Each visible pattern char is treated as one 5-minute unit.
+            unit_count = len([ch for ch in pattern_text if not ch.isspace()])
+
+            if unit_count > 0:
+                minutes = unit_count * 5
+
+                if minutes < 5:
+                    return 30
+
+                if minutes > 480:
+                    return 480
+
+                return minutes
+
+        return 30
+
+
+    def normalize_open_dental_appointment_status(
+        self,
+        raw_status: Any,
+    ) -> str:
+        """
+        Maps Open Dental appointment status into our internal status.
+
+        Our booking conflict logic currently treats status='confirmed' as busy.
+        Cancelled/broken/deleted/unscheduled should not block time.
+        """
+
+        status = str(raw_status or "").strip().lower()
+
+        if not status:
+            return "confirmed"
+
+        cancelled_values = [
+            "cancelled",
+            "canceled",
+            "broken",
+            "deleted",
+            "unscheduled",
+            "unsched",
+        ]
+
+        for value in cancelled_values:
+            if value in status:
+                return "cancelled"
+
+        return "confirmed"
+
+
+    def normalize_appointment(
+        self,
+        raw_appointment: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Converts Open Dental appointment into our normalized PMS appointment format.
+
+        Open Dental common fields:
+        - AptNum -> id
+        - PatNum -> patient_external_id
+        - ProvNum -> provider_external_id
+        - AptDateTime -> start_time
+        - Pattern -> duration
+        - AptStatus -> status
+        - ProcDescript -> service_name / reason
+        - DateTStamp -> pms_updated_at
+        """
+
+        apt_num = raw_appointment.get("AptNum")
+
+        start_time = self.parse_open_dental_appointment_datetime(
+            raw_appointment.get("AptDateTime")
+            or raw_appointment.get("DateTime")
+            or raw_appointment.get("StartTime")
+        )
+
+        duration_minutes = self.parse_open_dental_appointment_duration_minutes(
+            raw_appointment
+        )
+
+        service_name = (
+            raw_appointment.get("ProcDescript")
+            or raw_appointment.get("procDescript")
+            or raw_appointment.get("ProcCode")
+            or raw_appointment.get("procedure")
+            or None
+        )
+
+        pat_num = raw_appointment.get("PatNum")
+        prov_num = raw_appointment.get("ProvNum")
+
+        return {
+            "id": str(apt_num) if apt_num is not None else None,
+            "patient_external_id": str(pat_num) if pat_num not in [None, 0, "0"] else None,
+            "provider_external_id": str(prov_num) if prov_num not in [None, 0, "0"] else None,
+            "start_time": start_time,
+            "duration_minutes": duration_minutes,
+            "status": self.normalize_open_dental_appointment_status(
+                raw_appointment.get("AptStatus")
+                or raw_appointment.get("aptStatus")
+                or raw_appointment.get("Status")
+            ),
+            "service_name": service_name,
+            "reason": service_name,
+            "urgency": "normal",
+            "pms_updated_at": raw_appointment.get("DateTStamp"),
+            "raw": raw_appointment,
+        }
+
+
     async def list_appointments(
         self,
         date_start: str | None = None,
         date_end: str | None = None,
-        limit: int = 50,
-    ) -> Any:
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """
+        Reads Open Dental appointments for a date range and returns normalized rows.
+        """
+
         params: dict[str, Any] = {
             "Limit": limit,
+            "Offset": offset,
         }
 
         if date_start:
@@ -326,11 +505,30 @@ class OpenDentalClient(PmsClient):
         if date_end:
             params["DateEnd"] = date_end
 
-        return await self.request(
+        raw_appointments = await self.request(
             method="GET",
             path="/appointments",
             params=params,
         )
+
+        if not isinstance(raw_appointments, list):
+            return []
+
+        normalized = []
+
+        for raw_appointment in raw_appointments:
+            item = self.normalize_appointment(raw_appointment)
+
+            if not item.get("id"):
+                continue
+
+            if not item.get("start_time"):
+                continue
+
+            normalized.append(item)
+
+        return normalized
+    
 
     async def list_providers(self) -> list[dict[str, Any]]:
         raw_providers = await self.request(
@@ -376,10 +574,14 @@ class OpenDentalClient(PmsClient):
         """
         Converts Open Dental ProcTime pattern into approximate minutes.
 
-        MVP rule:
-        - Count X characters as time units.
-        - Each X = 10 minutes.
-        - Fallback = 30 minutes.
+        Open Dental ProcTime is not a direct minute value.
+        For MVP, do not let a single X become a 10-minute service.
+
+        Rule:
+        - Empty/unknown -> 30 minutes
+        - 1 or 2 X blocks -> 30 minutes
+        - 3 X blocks -> 45 minutes
+        - 4+ X blocks -> X count * 15 minutes
         """
 
         if not proc_time:
@@ -390,10 +592,13 @@ class OpenDentalClient(PmsClient):
         if x_count <= 0:
             return 30
 
-        minutes = x_count * 10
+        if x_count <= 2:
+            return 30
 
-        if minutes < 10:
-            return 10
+        minutes = x_count * 15
+
+        if minutes < 30:
+            return 30
 
         if minutes > 240:
             return 240
@@ -519,3 +724,393 @@ class OpenDentalClient(PmsClient):
             self.normalize_service(service)
             for service in raw_services
         ]
+    
+    def parse_open_dental_datetime_parts(
+        self,
+        value: str | None,
+    ) -> tuple[str | None, str | None]:
+        """
+        Converts Open Dental datetime string into date and time parts.
+
+        Example:
+        2026-07-01 09:00:00 -> ("2026-07-01", "09:00:00")
+        2026-07-01T09:00:00 -> ("2026-07-01", "09:00:00")
+        """
+
+        if not value:
+            return None, None
+
+        text = str(value).strip()
+
+        if "T" in text:
+            date_part, time_part = text.split("T", 1)
+        elif " " in text:
+            date_part, time_part = text.split(" ", 1)
+        else:
+            return text[:10], None
+
+        time_part = time_part.replace("Z", "").split(".")[0]
+
+        if len(time_part) == 5:
+            time_part = f"{time_part}:00"
+
+        return date_part[:10], time_part[:8]
+    
+
+    def normalize_availability_rule(
+        self,
+        raw_schedule: dict[str, Any],
+        provider_external_id: str | None = None,
+        external_id_suffix: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Converts one Open Dental schedule entry into our normalized calendar rule format.
+
+        Provider schedule:
+        - rule_type = availability
+
+        Blockout:
+        - rule_type = lunch / meeting / vacation / blockout / ...
+        - provider_external_id is resolved from operatory provider mapping.
+        """
+
+        schedule_num = raw_schedule.get("ScheduleNum")
+
+        sched_date = self.normalize_open_dental_date(
+            raw_schedule.get("SchedDate")
+        )
+
+        start_date = sched_date or self.normalize_open_dental_date(
+            raw_schedule.get("StartTime")
+        )
+
+        end_date = sched_date or self.normalize_open_dental_date(
+            raw_schedule.get("StopTime")
+        )
+
+        start_time = self.normalize_open_dental_time(
+            raw_schedule.get("StartTime")
+        )
+
+        end_time = self.normalize_open_dental_time(
+            raw_schedule.get("StopTime")
+        )
+
+        if not end_date:
+            end_date = start_date
+
+        if provider_external_id is None:
+            prov_num = raw_schedule.get("ProvNum")
+            provider_external_id = (
+                str(prov_num)
+                if prov_num not in [None, 0, "0"]
+                else None
+            )
+
+        base_external_id = str(schedule_num) if schedule_num is not None else None
+
+        if base_external_id and external_id_suffix:
+            external_id = f"{base_external_id}:{external_id_suffix}"
+        else:
+            external_id = base_external_id
+
+        rule_type = self.normalize_open_dental_rule_type(raw_schedule)
+
+        return {
+            "id": external_id,
+            "provider_external_id": provider_external_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "repeat_type": "none",
+            "rule_type": rule_type,
+            "is_active": True,
+            "notes": (
+                raw_schedule.get("blockoutType")
+                or raw_schedule.get("Note")
+                or raw_schedule.get("SchedType")
+                or None
+            ),
+            "pms_updated_at": raw_schedule.get("DateTStamp"),
+            "raw": raw_schedule,
+        }
+    
+    async def list_availability_rules(
+        self,
+        date_start: str,
+        date_end: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Reads Open Dental schedules for a date range.
+
+        Imports:
+        - Provider schedules as rule_type='availability'
+        - Blockouts as rule_type='lunch', 'meeting', 'vacation', 'blockout', etc.
+
+        Important:
+        Open Dental blockouts are usually linked to operatories, not directly to providers.
+        We map blockout operatories to providers using /operatories.
+        """
+
+        raw_schedules = await self.request(
+            method="GET",
+            path="/schedules",
+            params={
+                "dateStart": date_start,
+                "dateEnd": date_end,
+            },
+        )
+
+        if not isinstance(raw_schedules, list):
+            return []
+
+        operatory_provider_map = await self.build_operatory_provider_map()
+
+        normalized: list[dict[str, Any]] = []
+
+        for raw_schedule in raw_schedules:
+            sched_type = str(raw_schedule.get("SchedType") or "").lower()
+
+            # 1. Provider working schedule.
+            if sched_type == "provider":
+                prov_num = raw_schedule.get("ProvNum")
+
+                if prov_num in [None, 0, "0"]:
+                    continue
+
+                item = self.normalize_availability_rule(
+                    raw_schedule=raw_schedule,
+                    provider_external_id=str(prov_num),
+                )
+
+                if not item.get("id"):
+                    continue
+
+                if not item.get("provider_external_id"):
+                    continue
+
+                if not item.get("start_date"):
+                    continue
+
+                if not item.get("start_time") or not item.get("end_time"):
+                    continue
+
+                normalized.append(item)
+                continue
+
+            # 2. Blockout schedule.
+            if sched_type == "blockout":
+                operatory_ids = self.parse_operatory_ids(
+                    raw_schedule.get("operatories")
+                )
+
+                if not operatory_ids:
+                    continue
+
+                for operatory_id in operatory_ids:
+                    provider_ids = operatory_provider_map.get(str(operatory_id)) or []
+
+                    for provider_id in provider_ids:
+                        item = self.normalize_availability_rule(
+                            raw_schedule=raw_schedule,
+                            provider_external_id=provider_id,
+                            external_id_suffix=f"op:{operatory_id}:prov:{provider_id}",
+                        )
+
+                        if not item.get("id"):
+                            continue
+
+                        if not item.get("provider_external_id"):
+                            continue
+
+                        if not item.get("start_date"):
+                            continue
+
+                        if not item.get("start_time") or not item.get("end_time"):
+                            continue
+
+                        # Safety: blockouts must not become availability.
+                        if item.get("rule_type") == "availability":
+                            item["rule_type"] = "blockout"
+
+                        normalized.append(item)
+
+        return normalized
+    
+    def normalize_open_dental_time(
+        self,
+        value: str | None,
+    ) -> str | None:
+        """
+        Converts Open Dental time value into HH:MM:SS.
+        Examples:
+        08:00:00 -> 08:00:00
+        08:00 -> 08:00:00
+        2026-07-01 08:00:00 -> 08:00:00
+        """
+
+        if not value:
+            return None
+
+        text = str(value).strip()
+
+        if "T" in text:
+            text = text.split("T", 1)[1]
+
+        if " " in text:
+            text = text.split(" ", 1)[1]
+
+        text = text.replace("Z", "").split(".")[0]
+
+        if len(text) == 5:
+            text = f"{text}:00"
+
+        if len(text) >= 8:
+            return text[:8]
+
+        return None
+
+    def normalize_open_dental_date(
+        self,
+        value: str | None,
+    ) -> str | None:
+        """
+        Converts Open Dental date/datetime into YYYY-MM-DD.
+        """
+
+        if not value:
+            return None
+
+        text = str(value).strip()
+
+        if "T" in text:
+            return text.split("T", 1)[0][:10]
+
+        if " " in text:
+            return text.split(" ", 1)[0][:10]
+
+        return text[:10]
+
+    def parse_operatory_ids(
+        self,
+        operatories_value: Any,
+    ) -> list[str]:
+        """
+        Open Dental schedules may return operatories as a comma-separated string.
+        Example:
+        "5"
+        "5,6"
+        """
+
+        if operatories_value is None:
+            return []
+
+        if isinstance(operatories_value, list):
+            return [
+                str(item).strip()
+                for item in operatories_value
+                if str(item).strip()
+            ]
+
+        text = str(operatories_value).strip()
+
+        if not text:
+            return []
+
+        return [
+            part.strip()
+            for part in text.split(",")
+            if part.strip()
+        ]
+
+    def normalize_open_dental_rule_type(
+        self,
+        raw_schedule: dict[str, Any],
+    ) -> str:
+        """
+        Maps Open Dental blockout label into our internal rule_type.
+
+        Only 'availability' opens time.
+        Any other rule_type is treated as blocked time by our booking logic.
+        """
+
+        sched_type = str(raw_schedule.get("SchedType") or "").lower()
+        blockout_name = str(raw_schedule.get("blockoutType") or "").lower()
+        note = str(raw_schedule.get("Note") or "").lower()
+
+        combined = f"{blockout_name} {note}".strip()
+
+        if sched_type == "provider":
+            return "availability"
+
+        if "lunch" in combined:
+            return "lunch"
+
+        if "vacation" in combined or "holiday" in combined:
+            return "vacation"
+
+        if "meeting" in combined:
+            return "meeting"
+
+        if "training" in combined:
+            return "training"
+
+        if "closed" in combined:
+            return "clinic_closed"
+
+        if "personal" in combined:
+            return "personal"
+
+        return "blockout"
+    
+    async def list_operatories(self) -> list[dict[str, Any]]:
+        raw_operatories = await self.request(
+            method="GET",
+            path="/operatories",
+        )
+
+        if not isinstance(raw_operatories, list):
+            return []
+
+        return raw_operatories
+
+    async def build_operatory_provider_map(self) -> dict[str, list[str]]:
+        """
+        Builds:
+        {
+          "5": ["2"],
+          "6": ["3"]
+        }
+
+        Open Dental Operatory:
+        - OperatoryNum
+        - ProvDentist
+        - ProvHygienist
+        """
+
+        operatories = await self.list_operatories()
+
+        mapping: dict[str, list[str]] = {}
+
+        for operatory in operatories:
+            op_num = operatory.get("OperatoryNum")
+
+            if op_num is None:
+                continue
+
+            provider_ids: list[str] = []
+
+            prov_dentist = operatory.get("ProvDentist")
+            prov_hygienist = operatory.get("ProvHygienist")
+
+            if prov_dentist not in [None, 0, "0"]:
+                provider_ids.append(str(prov_dentist))
+
+            if prov_hygienist not in [None, 0, "0"]:
+                provider_ids.append(str(prov_hygienist))
+
+            mapping[str(op_num)] = provider_ids
+
+        return mapping
+    

@@ -711,6 +711,7 @@ def get_calendar_availability_rules_for_doctor(
             .select("*")
             .eq("clinic_id", clinic_id)
             .eq("doctor_id", doctor_id)
+            .eq("rule_type", "availability")
             .eq("is_active", True)
             .lte("start_date", end_date.isoformat())
             .or_(f"end_date.is.null,end_date.gte.{start_date.isoformat()}")
@@ -732,6 +733,43 @@ def get_calendar_availability_rules_for_doctor(
         print(f"Error loading availability rules: {e}")
         return []
 
+def get_calendar_blockout_rules_for_doctor(
+    clinic_id: str | None,
+    doctor_id: str | None,
+    start_date: date,
+    end_date: date,
+) -> list[dict]:
+    if not supabase or not clinic_id or not doctor_id:
+        print("Cannot load blockout rules: missing supabase, clinic_id, or doctor_id")
+        return []
+
+    try:
+        result = (
+            supabase.table("calendar_availability_rules")
+            .select("*")
+            .eq("clinic_id", clinic_id)
+            .eq("doctor_id", doctor_id)
+            .eq("is_active", True)
+            .neq("rule_type", "availability")
+            .lte("start_date", end_date.isoformat())
+            .or_(f"end_date.is.null,end_date.gte.{start_date.isoformat()}")
+            .order("start_date")
+            .order("start_time")
+            .execute()
+        )
+
+        rows = result.data or []
+
+        print(
+            f"Loaded blockout rules for doctor={doctor_id}, "
+            f"range={start_date} to {end_date}: {rows}"
+        )
+
+        return rows
+
+    except Exception as e:
+        print(f"Error loading blockout rules: {e}")
+        return []
 
 def get_calendar_availability_exceptions_for_rules(
     clinic_id: str | None,
@@ -978,6 +1016,12 @@ def find_next_available_slots_for_doctor(
         start_date=search_start_date,
         end_date=search_end_date,
     )
+    blockout_rules = get_calendar_blockout_rules_for_doctor(
+        clinic_id=clinic_id,
+        doctor_id=doctor_id,
+        start_date=search_start_date,
+        end_date=search_end_date,
+    )
 
     if not rules:
         print(f"No availability rules found for doctor={doctor_id}")
@@ -1021,6 +1065,15 @@ def find_next_available_slots_for_doctor(
         day_end = datetime.combine(current_date, time(23, 59), tzinfo=tz)
 
         busy_intervals = []
+
+        blockout_intervals = get_daily_available_intervals_from_rules(
+            rules=blockout_rules,
+            exceptions=[],
+            target_date=current_date,
+            timezone_name=timezone_name,
+        )
+
+        busy_intervals.extend(blockout_intervals)
 
         for appointment in busy_appointments:
             try:
@@ -3860,4 +3913,589 @@ def import_pms_services_to_db(
         "total_payloads": len(payloads),
         "imported": imported_rows,
         "failed": failed,
+    }
+
+def get_doctor_id_by_external_id(
+    clinic_id: str,
+    pms_connection_id: str,
+    external_id: str | None,
+) -> str | None:
+    """
+    Finds internal clinic_doctors.id by PMS provider external_id.
+
+    Open Dental:
+    - provider ProvNum -> clinic_doctors.external_id
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    if not external_id:
+        return None
+
+    result = (
+        supabase.table("clinic_doctors")
+        .select("id")
+        .eq("clinic_id", clinic_id)
+        .eq("pms_connection_id", pms_connection_id)
+        .eq("external_id", str(external_id))
+        .limit(1)
+        .execute()
+    )
+
+    rows = result.data or []
+
+    if not rows:
+        return None
+
+    return rows[0]["id"]
+
+
+def delete_pms_availability_rules_for_date_range(
+    clinic_id: str,
+    pms_connection_id: str,
+    date_start: str,
+    date_end: str,
+) -> dict[str, Any]:
+    """
+    Deletes PMS-synced availability rules for a date range before re-importing.
+
+    This is important for availability because a PMS schedule may be changed
+    or deleted. Upsert alone would not remove old deleted schedules.
+
+    Only PMS records for this connection are deleted.
+    Manual dashboard rules are not touched.
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    result = (
+        supabase.table("calendar_availability_rules")
+        .delete()
+        .eq("clinic_id", clinic_id)
+        .eq("pms_connection_id", pms_connection_id)
+        .gte("start_date", date_start)
+        .lte("start_date", date_end)
+        .execute()
+    )
+
+    deleted_rows = result.data or []
+
+    return {
+        "deleted_count": len(deleted_rows),
+        "deleted": deleted_rows,
+    }
+
+
+def build_pms_availability_rule_payload(
+    clinic_id: str,
+    pms_connection_id: str,
+    pms_type: str,
+    rule: dict[str, Any],
+    now_iso: str,
+) -> dict[str, Any]:
+    """
+    Converts one normalized PMS schedule into calendar_availability_rules payload.
+
+    For Open Dental:
+    - rule["id"] = ScheduleNum
+    - rule["provider_external_id"] = ProvNum
+    - rule["start_date"] = schedule date
+    - rule["start_time"] / rule["end_time"] = working interval
+    """
+
+    external_id = rule.get("id")
+
+    if external_id is None or str(external_id).strip() == "":
+        raise ValueError("PMS availability rule is missing external id")
+
+    external_id = str(external_id)
+
+    start_date = rule.get("start_date")
+    end_date = rule.get("end_date") or start_date
+    start_time = rule.get("start_time")
+    end_time = rule.get("end_time")
+
+    if not start_date:
+        raise ValueError("PMS availability rule is missing start_date")
+
+    if not start_time or not end_time:
+        raise ValueError("PMS availability rule is missing start_time/end_time")
+
+    doctor_id = get_doctor_id_by_external_id(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        external_id=rule.get("provider_external_id"),
+    )
+
+    if not doctor_id:
+        raise ValueError(
+            f"No local doctor found for PMS provider external_id={rule.get('provider_external_id')}"
+        )
+
+    return {
+        "clinic_id": clinic_id,
+        "doctor_id": doctor_id,
+
+        # PMS schedules are imported as date-specific cache records.
+        "start_date": start_date,
+        "end_date": end_date,
+        "day_of_week": None,
+        "start_time": start_time,
+        "end_time": end_time,
+        "timezone": "America/Vancouver",
+        "repeat_type": rule.get("repeat_type") or "none",
+        "is_active": bool(rule.get("is_active", True)),
+        "notes": rule.get("notes"),
+
+        "pms_connection_id": pms_connection_id,
+        "pms_type": pms_type,
+        "external_id": external_id,
+        "sync_status": "synced",
+        "last_synced_at": now_iso,
+        "last_pulled_at": now_iso,
+        "last_sync_error": None,
+        "external_raw": rule.get("raw") or rule,
+
+        "rule_type": rule.get("rule_type") or "availability",
+
+        "updated_at": now_iso,
+    }
+
+
+def import_pms_availability_rules_to_db(
+    clinic_id: str,
+    connection: dict[str, Any],
+    rules: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Bulk upserts PMS provider schedules into calendar_availability_rules.
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    pms_connection_id = connection["id"]
+    pms_type = connection["pms_type"]
+
+    payloads: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    for rule in rules:
+        try:
+            payload = build_pms_availability_rule_payload(
+                clinic_id=clinic_id,
+                pms_connection_id=pms_connection_id,
+                pms_type=pms_type,
+                rule=rule,
+                now_iso=now_iso,
+            )
+
+            payloads.append(payload)
+
+        except Exception as e:
+            failed.append(
+                {
+                    "rule": rule,
+                    "error": str(e),
+                }
+            )
+
+    if not payloads:
+        return {
+            "imported_count": 0,
+            "failed_count": len(failed),
+            "total_payloads": 0,
+            "imported": [],
+            "failed": failed,
+        }
+
+    imported_rows: list[dict[str, Any]] = []
+
+    for payload_batch in chunk_list(payloads, 500):
+        try:
+            result = (
+                supabase.table("calendar_availability_rules")
+                .upsert(
+                    payload_batch,
+                    on_conflict="clinic_id,pms_connection_id,external_id",
+                )
+                .execute()
+            )
+
+            imported_rows.extend(result.data or [])
+
+        except Exception as e:
+            failed.append(
+                {
+                    "batch_size": len(payload_batch),
+                    "error": str(e),
+                }
+            )
+
+    return {
+        "imported_count": len(imported_rows),
+        "failed_count": len(failed),
+        "total_payloads": len(payloads),
+        "imported": imported_rows,
+        "failed": failed,
+    }
+
+
+def replace_pms_availability_rules_for_date_range(
+    clinic_id: str,
+    connection: dict[str, Any],
+    rules: list[dict[str, Any]],
+    date_start: str,
+    date_end: str,
+) -> dict[str, Any]:
+    """
+    Replaces PMS availability cache for a date range.
+
+    This is the correct sync behavior for availability:
+    - delete old PMS-synced rules in the window
+    - insert the current PMS schedules for the same window
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    pms_connection_id = connection["id"]
+
+    delete_result = delete_pms_availability_rules_for_date_range(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        date_start=date_start,
+        date_end=date_end,
+    )
+
+    import_result = import_pms_availability_rules_to_db(
+        clinic_id=clinic_id,
+        connection=connection,
+        rules=rules,
+    )
+
+    return {
+        "deleted_count": delete_result["deleted_count"],
+        "imported_count": import_result["imported_count"],
+        "failed_count": import_result["failed_count"],
+        "total_payloads": import_result["total_payloads"],
+        "failed": import_result["failed"],
+    }
+
+def get_patient_id_by_external_id(
+    clinic_id: str,
+    pms_connection_id: str,
+    external_id: str | None,
+) -> str | None:
+    """
+    Finds internal patients.id by PMS patient external_id.
+
+    Open Dental:
+    - PatNum -> patients.external_id
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    if not external_id:
+        return None
+
+    result = (
+        supabase.table("patients")
+        .select("id")
+        .eq("clinic_id", clinic_id)
+        .eq("pms_connection_id", pms_connection_id)
+        .eq("external_id", str(external_id))
+        .limit(1)
+        .execute()
+    )
+
+    rows = result.data or []
+
+    if not rows:
+        return None
+
+    return rows[0]["id"]
+
+def delete_pms_appointments_for_date_range(
+    clinic_id: str,
+    pms_connection_id: str,
+    date_start: str,
+    date_end: str,
+    timezone_name: str = "America/Vancouver",
+) -> dict[str, Any]:
+    """
+    Deletes PMS-synced appointments for a date range before re-importing.
+
+    Only appointments from this PMS connection are deleted.
+    AI/manual appointments are not touched.
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    tz = ZoneInfo(timezone_name)
+
+    start_dt = datetime.fromisoformat(date_start).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+        tzinfo=tz,
+    )
+
+    end_dt = datetime.fromisoformat(date_end).replace(
+        hour=23,
+        minute=59,
+        second=59,
+        microsecond=0,
+        tzinfo=tz,
+    )
+
+    result = (
+        supabase.table("appointments")
+        .delete()
+        .eq("clinic_id", clinic_id)
+        .eq("pms_connection_id", pms_connection_id)
+        .gte("start_time", start_dt.isoformat())
+        .lte("start_time", end_dt.isoformat())
+        .execute()
+    )
+
+    deleted_rows = result.data or []
+
+    return {
+        "deleted_count": len(deleted_rows),
+        "deleted": deleted_rows,
+    }
+
+
+def build_pms_appointment_payload(
+    clinic_id: str,
+    pms_connection_id: str,
+    pms_type: str,
+    appointment: dict[str, Any],
+    now_iso: str,
+    timezone_name: str = "America/Vancouver",
+) -> dict[str, Any]:
+    """
+    Converts one normalized PMS appointment into appointments table payload.
+    """
+
+    external_id = appointment.get("id")
+
+    if external_id is None or str(external_id).strip() == "":
+        raise ValueError("PMS appointment is missing external id")
+
+    external_id = str(external_id)
+
+    start_time_raw = appointment.get("start_time")
+
+    if not start_time_raw:
+        raise ValueError("PMS appointment is missing start_time")
+
+    tz = ZoneInfo(timezone_name)
+
+    try:
+        start_dt = datetime.fromisoformat(
+            str(start_time_raw).replace("Z", "+00:00")
+        )
+
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=tz)
+        else:
+            start_dt = start_dt.astimezone(tz)
+
+    except Exception:
+        raise ValueError(f"Invalid appointment start_time: {start_time_raw}")
+
+    duration_minutes = appointment.get("duration_minutes") or 30
+
+    try:
+        duration_minutes = int(duration_minutes)
+    except Exception:
+        duration_minutes = 30
+
+    if duration_minutes <= 0:
+        duration_minutes = 30
+
+    end_dt = start_dt + timedelta(minutes=duration_minutes)
+
+    doctor_id = get_doctor_id_by_external_id(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        external_id=appointment.get("provider_external_id"),
+    )
+
+    patient_id = get_patient_id_by_external_id(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        external_id=appointment.get("patient_external_id"),
+    )
+
+    service_name = appointment.get("service_name") or appointment.get("reason")
+
+    return {
+        "clinic_id": clinic_id,
+        "doctor_id": doctor_id,
+        "patient_id": patient_id,
+
+        "service_category_id": None,
+        "service_name": service_name,
+        "reason": appointment.get("reason") or service_name,
+        "urgency": appointment.get("urgency") or "normal",
+
+        "start_time": start_dt.isoformat(),
+        "end_time": end_dt.isoformat(),
+        "duration_minutes": duration_minutes,
+        "status": appointment.get("status") or "confirmed",
+        "source": pms_type,
+
+        "notes": appointment.get("notes"),
+
+        "pms_connection_id": pms_connection_id,
+        "pms_type": pms_type,
+        "external_id": external_id,
+        "pms_updated_at": appointment.get("pms_updated_at"),
+
+        "sync_status": "synced",
+        "last_synced_at": now_iso,
+        "last_pulled_at": now_iso,
+        "last_sync_error": None,
+        "external_raw": appointment.get("raw") or appointment,
+
+        "updated_at": now_iso,
+    }
+
+def import_pms_appointments_to_db(
+    clinic_id: str,
+    connection: dict[str, Any],
+    appointments: list[dict[str, Any]],
+    timezone_name: str = "America/Vancouver",
+) -> dict[str, Any]:
+    """
+    Bulk upserts normalized PMS appointments into appointments table.
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    pms_connection_id = connection["id"]
+    pms_type = connection["pms_type"]
+
+    payloads: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    for appointment in appointments:
+        try:
+            payload = build_pms_appointment_payload(
+                clinic_id=clinic_id,
+                pms_connection_id=pms_connection_id,
+                pms_type=pms_type,
+                appointment=appointment,
+                now_iso=now_iso,
+                timezone_name=timezone_name,
+            )
+
+            payloads.append(payload)
+
+        except Exception as e:
+            failed.append(
+                {
+                    "appointment": appointment,
+                    "error": str(e),
+                }
+            )
+
+    if not payloads:
+        return {
+            "imported_count": 0,
+            "failed_count": len(failed),
+            "total_payloads": 0,
+            "imported": [],
+            "failed": failed,
+        }
+
+    imported_rows: list[dict[str, Any]] = []
+
+    for payload_batch in chunk_list(payloads, 500):
+        try:
+            result = (
+                supabase.table("appointments")
+                .upsert(
+                    payload_batch,
+                    on_conflict="clinic_id,pms_connection_id,external_id",
+                )
+                .execute()
+            )
+
+            imported_rows.extend(result.data or [])
+
+        except Exception as e:
+            failed.append(
+                {
+                    "batch_size": len(payload_batch),
+                    "error": str(e),
+                }
+            )
+
+    return {
+        "imported_count": len(imported_rows),
+        "failed_count": len(failed),
+        "total_payloads": len(payloads),
+        "imported": imported_rows,
+        "failed": failed,
+    }
+
+
+def replace_pms_appointments_for_date_range(
+    clinic_id: str,
+    connection: dict[str, Any],
+    appointments: list[dict[str, Any]],
+    date_start: str,
+    date_end: str,
+    timezone_name: str = "America/Vancouver",
+) -> dict[str, Any]:
+    """
+    Replaces PMS appointment cache for a date range.
+
+    This handles:
+    - new appointments
+    - changed appointments
+    - deleted appointments
+    - cancelled appointments if they are returned by PMS
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    pms_connection_id = connection["id"]
+
+    delete_result = delete_pms_appointments_for_date_range(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        date_start=date_start,
+        date_end=date_end,
+        timezone_name=timezone_name,
+    )
+
+    import_result = import_pms_appointments_to_db(
+        clinic_id=clinic_id,
+        connection=connection,
+        appointments=appointments,
+        timezone_name=timezone_name,
+    )
+
+    return {
+        "deleted_count": delete_result["deleted_count"],
+        "imported_count": import_result["imported_count"],
+        "failed_count": import_result["failed_count"],
+        "total_payloads": import_result["total_payloads"],
+        "failed": import_result["failed"],
     }

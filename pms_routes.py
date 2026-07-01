@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter
 
 from pms.base import PmsApiError
@@ -14,6 +17,8 @@ from supabase_service import (
     import_pms_doctors_to_db,
     import_pms_service_groups_to_db,
     import_pms_services_to_db,
+    replace_pms_availability_rules_for_date_range,
+    replace_pms_appointments_for_date_range,
 )
 
 
@@ -610,3 +615,279 @@ async def import_pms_services(clinic_id: str):
             "clinic_id": clinic_id,
             "message": str(e),
         }        
+
+
+@router.post("/import-availability/{clinic_id}")
+async def import_pms_availability(
+    clinic_id: str,
+    date_start: str | None = None,
+    date_end: str | None = None,
+    days_ahead: int = 90,
+):
+    """
+    Replaces provider availability cache from the active PMS connection.
+
+    Behavior:
+    - If date_start/date_end are provided, replaces that exact range.
+    - If not provided, replaces today through today + days_ahead.
+    - Old PMS-synced availability rows in the range are deleted first.
+    - Manual dashboard rules are not touched.
+
+    Example:
+    POST /pms/import-availability/{clinic_id}
+
+    Example with range:
+    POST /pms/import-availability/{clinic_id}?date_start=2026-07-01&date_end=2026-09-30
+    """
+
+    connection = get_active_pms_connection_for_clinic(clinic_id)
+
+    if not connection:
+        return {
+            "ok": False,
+            "type": "missing_connection",
+            "message": "No active PMS connection found for this clinic.",
+        }
+
+    connection_id = connection["id"]
+
+    try:
+        if not date_start or not date_end:
+            timezone_name = connection.get("timezone") or "America/Vancouver"
+            tz = ZoneInfo(timezone_name)
+
+            today = datetime.now(tz).date()
+            end_day = today + timedelta(days=days_ahead)
+
+            date_start = today.isoformat()
+            date_end = end_day.isoformat()
+
+        client = get_pms_client_from_connection(connection)
+
+        if not hasattr(client, "list_availability_rules"):
+            return {
+                "ok": False,
+                "type": "unsupported_availability_import",
+                "message": "This PMS client does not support availability import yet.",
+                "clinic_id": clinic_id,
+                "connection_id": connection_id,
+                "pms_type": connection.get("pms_type"),
+            }
+
+        # Make sure providers exist locally before linking availability to doctor_id.
+        if hasattr(client, "list_providers"):
+            doctors = await client.list_providers()
+
+            import_pms_doctors_to_db(
+                clinic_id=clinic_id,
+                connection=connection,
+                doctors=doctors,
+            )
+
+        rules = await client.list_availability_rules(
+            date_start=date_start,
+            date_end=date_end,
+        )
+
+        result = replace_pms_availability_rules_for_date_range(
+            clinic_id=clinic_id,
+            connection=connection,
+            rules=rules,
+            date_start=date_start,
+            date_end=date_end,
+        )
+
+        mark_pms_connection_success(connection_id)
+
+        return {
+            "ok": True,
+            "mode": "replace_availability_window",
+            "clinic_id": clinic_id,
+            "connection_id": connection_id,
+            "pms_type": connection.get("pms_type"),
+            "date_start": date_start,
+            "date_end": date_end,
+            "days_ahead": days_ahead,
+            "pulled_count": len(rules),
+            "deleted_count": result["deleted_count"],
+            "imported_count": result["imported_count"],
+            "failed_count": result["failed_count"],
+            "failed": result["failed"][:20],
+        }
+
+    except PmsApiError as e:
+        error_message = f"{e.message}: {e.response_body}"
+        mark_pms_connection_error(connection_id, error_message)
+
+        return {
+            "ok": False,
+            "type": "pms_api_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "pms_type": connection.get("pms_type"),
+            "status_code": e.status_code,
+            "message": e.message,
+            "response_body": e.response_body,
+        }
+
+    except UnsupportedPmsError as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "unsupported_pms",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
+        }
+
+    except Exception as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "server_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
+        }
+    
+@router.post("/import-appointments/{clinic_id}")
+async def import_pms_appointments(
+    clinic_id: str,
+    date_start: str | None = None,
+    date_end: str | None = None,
+    days_ahead: int = 90,
+):
+    """
+    Replaces appointment cache from the active PMS connection.
+
+    Behavior:
+    - If date_start/date_end are provided, replaces that exact range.
+    - If not provided, replaces today through today + days_ahead.
+    - Old PMS-synced appointments in the range are deleted first.
+    - AI/manual appointments are not touched.
+
+    Example:
+    POST /pms/import-appointments/{clinic_id}
+
+    Example with range:
+    POST /pms/import-appointments/{clinic_id}?date_start=2026-07-01&date_end=2026-09-30
+    """
+
+    connection = get_active_pms_connection_for_clinic(clinic_id)
+
+    if not connection:
+        return {
+            "ok": False,
+            "type": "missing_connection",
+            "message": "No active PMS connection found for this clinic.",
+        }
+
+    connection_id = connection["id"]
+
+    try:
+        timezone_name = connection.get("timezone") or "America/Vancouver"
+
+        if not date_start or not date_end:
+            tz = ZoneInfo(timezone_name)
+
+            today = datetime.now(tz).date()
+            end_day = today + timedelta(days=days_ahead)
+
+            date_start = today.isoformat()
+            date_end = end_day.isoformat()
+
+        client = get_pms_client_from_connection(connection)
+
+        if not hasattr(client, "list_appointments"):
+            return {
+                "ok": False,
+                "type": "unsupported_appointment_import",
+                "message": "This PMS client does not support appointment import yet.",
+                "clinic_id": clinic_id,
+                "connection_id": connection_id,
+                "pms_type": connection.get("pms_type"),
+            }
+
+        # Make sure doctors and patients are likely present locally.
+        # Doctors are cheap to sync here because appointments need provider mapping.
+        if hasattr(client, "list_providers"):
+            doctors = await client.list_providers()
+
+            import_pms_doctors_to_db(
+                clinic_id=clinic_id,
+                connection=connection,
+                doctors=doctors,
+            )
+
+        appointments = await client.list_appointments(
+            date_start=date_start,
+            date_end=date_end,
+            limit=500,
+            offset=0,
+        )
+
+        result = replace_pms_appointments_for_date_range(
+            clinic_id=clinic_id,
+            connection=connection,
+            appointments=appointments,
+            date_start=date_start,
+            date_end=date_end,
+            timezone_name=timezone_name,
+        )
+
+        mark_pms_connection_success(connection_id)
+
+        return {
+            "ok": True,
+            "mode": "replace_appointments_window",
+            "clinic_id": clinic_id,
+            "connection_id": connection_id,
+            "pms_type": connection.get("pms_type"),
+            "date_start": date_start,
+            "date_end": date_end,
+            "days_ahead": days_ahead,
+            "pulled_count": len(appointments),
+            "deleted_count": result["deleted_count"],
+            "imported_count": result["imported_count"],
+            "failed_count": result["failed_count"],
+            "failed": result["failed"][:20],
+        }
+
+    except PmsApiError as e:
+        error_message = f"{e.message}: {e.response_body}"
+        mark_pms_connection_error(connection_id, error_message)
+
+        return {
+            "ok": False,
+            "type": "pms_api_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "pms_type": connection.get("pms_type"),
+            "status_code": e.status_code,
+            "message": e.message,
+            "response_body": e.response_body,
+        }
+
+    except UnsupportedPmsError as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "unsupported_pms",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
+        }
+
+    except Exception as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "server_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
+        }
