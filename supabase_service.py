@@ -4353,7 +4353,7 @@ def build_pms_appointment_payload(
         "end_time": end_dt.isoformat(),
         "duration_minutes": duration_minutes,
         "status": appointment.get("status") or "confirmed",
-        "source": pms_type,
+        "source": "pms",
 
         "notes": appointment.get("notes"),
 
