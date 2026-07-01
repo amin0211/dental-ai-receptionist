@@ -341,7 +341,7 @@ async def sync_pms_patients(
             "message": error_message,
         }
     
-    @router.post("/import-doctors/{clinic_id}")
+@router.post("/import-doctors/{clinic_id}")
 async def import_pms_doctors(clinic_id: str):
     """
     Imports providers/doctors from the active PMS connection into clinic_doctors.
