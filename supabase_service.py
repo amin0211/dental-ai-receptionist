@@ -4506,19 +4506,26 @@ def replace_pms_appointments_for_date_range(
         "failed": import_result["failed"],
     }
 
+
 def get_service_category_id_for_pms_appointment(
     clinic_id: str,
     pms_connection_id: str,
     service_name: str | None,
 ) -> str | None:
     """
-    Tries to map an Open Dental appointment procedure description
-    to our service_categories row.
+    Maps Open Dental appointment ProcDescript to our service_categories row.
 
-    Examples:
+    Open Dental appointment often gives:
     - ProcDescript = "SRP"
     - ProcDescript = "Flo, Ex, Pro"
-    - ProcDescript = "Ext, Ext"
+
+    service_categories may store the matching value in:
+    - code
+    - name
+    - description
+    - external_raw.ProcCode
+    - external_raw.AbbrDesc
+    - external_raw.Descript
     """
 
     if supabase is None:
@@ -4532,44 +4539,98 @@ def get_service_category_id_for_pms_appointment(
     if not text:
         return None
 
-    # First: exact code/name match.
-    result = (
-        supabase.table("service_categories")
-        .select("id, name, code")
-        .eq("clinic_id", clinic_id)
-        .eq("pms_connection_id", pms_connection_id)
-        .or_(f"code.eq.{text},name.eq.{text}")
-        .limit(1)
-        .execute()
-    )
+    candidates = [text]
 
-    rows = result.data or []
+    # For descriptions like "Flo, Ex, Pro", try each procedure abbreviation too.
+    for part in text.split(","):
+        part = part.strip()
+        if part and part not in candidates:
+            candidates.append(part)
 
-    if rows:
-        return rows[0]["id"]
+    for candidate in candidates:
+        try:
+            # 1. Exact match on normal columns.
+            result = (
+                supabase.table("service_categories")
+                .select("id, name, code, description")
+                .eq("clinic_id", clinic_id)
+                .eq("pms_connection_id", pms_connection_id)
+                .or_(
+                    f"code.eq.{candidate},"
+                    f"name.eq.{candidate},"
+                    f"description.eq.{candidate}"
+                )
+                .limit(1)
+                .execute()
+            )
 
-    # Second: if ProcDescript has multiple parts like "Flo, Ex, Pro",
-    # try each part against code/name.
-    parts = [
-        part.strip()
-        for part in text.split(",")
-        if part.strip()
-    ]
+            rows = result.data or []
 
-    for part in parts:
-        result = (
-            supabase.table("service_categories")
-            .select("id, name, code")
-            .eq("clinic_id", clinic_id)
-            .eq("pms_connection_id", pms_connection_id)
-            .or_(f"code.eq.{part},name.eq.{part}")
-            .limit(1)
-            .execute()
-        )
+            if rows:
+                return rows[0]["id"]
 
-        rows = result.data or []
+        except Exception as e:
+            print(f"Exact service match failed for candidate={candidate}: {e}")
 
-        if rows:
-            return rows[0]["id"]
+        try:
+            # 2. Fuzzy match on normal columns.
+            result = (
+                supabase.table("service_categories")
+                .select("id, name, code, description")
+                .eq("clinic_id", clinic_id)
+                .eq("pms_connection_id", pms_connection_id)
+                .or_(
+                    f"code.ilike.%{candidate}%,"
+                    f"name.ilike.%{candidate}%,"
+                    f"description.ilike.%{candidate}%"
+                )
+                .limit(1)
+                .execute()
+            )
+
+            rows = result.data or []
+
+            if rows:
+                return rows[0]["id"]
+
+        except Exception as e:
+            print(f"Fuzzy service match failed for candidate={candidate}: {e}")
+
+        try:
+            # 3. Match inside Open Dental raw fields.
+            result = (
+                supabase.table("service_categories")
+                .select("id, name, code, external_raw")
+                .eq("clinic_id", clinic_id)
+                .eq("pms_connection_id", pms_connection_id)
+                .execute()
+            )
+
+            rows = result.data or []
+
+            candidate_lower = candidate.lower()
+
+            for row in rows:
+                raw = row.get("external_raw") or {}
+
+                raw_values = [
+                    raw.get("ProcCode"),
+                    raw.get("AbbrDesc"),
+                    raw.get("Descript"),
+                    raw.get("ProcCat"),
+                ]
+
+                for raw_value in raw_values:
+                    if raw_value is None:
+                        continue
+
+                    if str(raw_value).strip().lower() == candidate_lower:
+                        return row["id"]
+
+                    if candidate_lower in str(raw_value).strip().lower():
+                        return row["id"]
+
+        except Exception as e:
+            print(f"Raw service match failed for candidate={candidate}: {e}")
 
     return None
