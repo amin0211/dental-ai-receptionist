@@ -500,10 +500,10 @@ class OpenDentalClient(PmsClient):
         }
 
         if date_start:
-            params["DateStart"] = date_start
+            params["dateStart"] = date_start
 
         if date_end:
-            params["DateEnd"] = date_end
+            params["dateEnd"] = date_end
 
         raw_appointments = await self.request(
             method="GET",
@@ -525,6 +525,14 @@ class OpenDentalClient(PmsClient):
             if not item.get("start_time"):
                 continue
 
+            appointment_date = str(item.get("start_time") or "")[:10]
+
+            if date_start and appointment_date < date_start:
+                continue
+
+            if date_end and appointment_date > date_end:
+                continue
+            
             normalized.append(item)
 
         return normalized
