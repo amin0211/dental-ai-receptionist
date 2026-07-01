@@ -3422,3 +3422,136 @@ def import_pms_patients_to_db(
         "imported": imported_rows,
         "failed": failed,
     }
+
+
+def build_pms_doctor_payload(
+    clinic_id: str,
+    pms_connection_id: str,
+    pms_type: str,
+    doctor: dict[str, Any],
+    now_iso: str,
+) -> dict[str, Any]:
+    """
+    Converts one normalized PMS provider/doctor into clinic_doctors table payload.
+    """
+
+    external_id = doctor.get("id")
+
+    if external_id is None or str(external_id).strip() == "":
+        raise ValueError("PMS doctor is missing external id")
+
+    external_id = str(external_id)
+
+    full_name = doctor.get("full_name") or doctor.get("display_name")
+
+    if not full_name:
+        full_name = f"Provider {external_id}"
+
+    display_name = doctor.get("display_name") or full_name
+
+    return {
+        "clinic_id": clinic_id,
+        "pms_connection_id": pms_connection_id,
+        "pms_type": pms_type,
+        "external_id": external_id,
+
+        "full_name": full_name,
+        "display_name": display_name,
+        "title": doctor.get("title") or "Dr.",
+        "specialty": doctor.get("specialty"),
+        "phone_number": doctor.get("phone_number"),
+        "email": doctor.get("email"),
+        "is_active": bool(doctor.get("is_active", True)),
+        "notes": doctor.get("notes"),
+
+        "pms_updated_at": doctor.get("pms_updated_at"),
+        "sync_status": "synced",
+        "last_synced_at": now_iso,
+        "last_pulled_at": now_iso,
+        "last_sync_error": None,
+        "external_raw": doctor.get("raw") or doctor,
+
+        "updated_at": now_iso,
+    }
+
+
+def import_pms_doctors_to_db(
+    clinic_id: str,
+    connection: dict[str, Any],
+    doctors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Bulk upserts normalized PMS providers/doctors into clinic_doctors table.
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    pms_connection_id = connection["id"]
+    pms_type = connection["pms_type"]
+
+    payloads: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    for doctor in doctors:
+        try:
+            payload = build_pms_doctor_payload(
+                clinic_id=clinic_id,
+                pms_connection_id=pms_connection_id,
+                pms_type=pms_type,
+                doctor=doctor,
+                now_iso=now_iso,
+            )
+
+            payloads.append(payload)
+
+        except Exception as e:
+            failed.append(
+                {
+                    "doctor": doctor,
+                    "error": str(e),
+                }
+            )
+
+    if not payloads:
+        return {
+            "imported_count": 0,
+            "failed_count": len(failed),
+            "total_payloads": 0,
+            "imported": [],
+            "failed": failed,
+        }
+
+    imported_rows: list[dict[str, Any]] = []
+
+    for payload_batch in chunk_list(payloads, 500):
+        try:
+            result = (
+                supabase.table("clinic_doctors")
+                .upsert(
+                    payload_batch,
+                    on_conflict="clinic_id,pms_connection_id,external_id",
+                )
+                .execute()
+            )
+
+            imported_rows.extend(result.data or [])
+
+        except Exception as e:
+            failed.append(
+                {
+                    "batch_size": len(payload_batch),
+                    "error": str(e),
+                }
+            )
+
+    return {
+        "imported_count": len(payloads),
+        "failed_count": len(failed),
+        "total_payloads": len(payloads),
+        "imported": imported_rows,
+        "failed": failed,
+    }
+

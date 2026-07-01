@@ -11,6 +11,7 @@ from supabase_service import (
     mark_pms_sync_error,
     mark_pms_sync_started,
     mark_pms_sync_success,
+    import_pms_doctors_to_db,
 )
 
 
@@ -338,4 +339,83 @@ async def sync_pms_patients(
             "connection_id": connection_id,
             "clinic_id": clinic_id,
             "message": error_message,
+        }
+    
+    @router.post("/import-doctors/{clinic_id}")
+async def import_pms_doctors(clinic_id: str):
+    """
+    Imports providers/doctors from the active PMS connection into clinic_doctors.
+    """
+
+    connection = get_active_pms_connection_for_clinic(clinic_id)
+
+    if not connection:
+        return {
+            "ok": False,
+            "type": "missing_connection",
+            "message": "No active PMS connection found for this clinic.",
+        }
+
+    connection_id = connection["id"]
+
+    try:
+        client = get_pms_client_from_connection(connection)
+
+        doctors = await client.list_providers()
+
+        result = import_pms_doctors_to_db(
+            clinic_id=clinic_id,
+            connection=connection,
+            doctors=doctors,
+        )
+
+        mark_pms_connection_success(connection_id)
+
+        return {
+            "ok": True,
+            "mode": "manual_doctor_import",
+            "clinic_id": clinic_id,
+            "connection_id": connection_id,
+            "pms_type": connection.get("pms_type"),
+            "pulled_count": len(doctors),
+            "imported_count": result["imported_count"],
+            "failed_count": result["failed_count"],
+            "failed": result["failed"],
+        }
+
+    except PmsApiError as e:
+        error_message = f"{e.message}: {e.response_body}"
+        mark_pms_connection_error(connection_id, error_message)
+
+        return {
+            "ok": False,
+            "type": "pms_api_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "pms_type": connection.get("pms_type"),
+            "status_code": e.status_code,
+            "message": e.message,
+            "response_body": e.response_body,
+        }
+
+    except UnsupportedPmsError as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "unsupported_pms",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
+        }
+
+    except Exception as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "server_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
         }

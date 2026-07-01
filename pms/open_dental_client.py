@@ -145,6 +145,56 @@ class OpenDentalClient(PmsClient):
             "raw": raw_patient,
         }
 
+    def normalize_provider(self, raw_provider: dict[str, Any]) -> dict[str, Any]:
+        """
+        Converts Open Dental provider object into our normalized PMS doctor format.
+
+        Open Dental common fields:
+        - ProvNum -> id
+        - FName / LName -> full_name
+        - Abbr -> display_name
+        - Specialty -> specialty
+        - IsHidden -> is_active false
+        - DateTStamp -> pms_updated_at
+        """
+
+        prov_num = raw_provider.get("ProvNum")
+
+        first_name = raw_provider.get("FName") or ""
+        last_name = raw_provider.get("LName") or ""
+        abbreviation = raw_provider.get("Abbr") or ""
+
+        full_name = " ".join(
+            part for part in [first_name, last_name] if part
+        ).strip()
+
+        if not full_name:
+            full_name = abbreviation or f"Provider {prov_num}"
+
+        display_name = abbreviation or full_name
+
+        is_hidden = raw_provider.get("IsHidden")
+
+        is_active = True
+
+        if is_hidden is True:
+            is_active = False
+        elif str(is_hidden).lower() in ["true", "1", "yes"]:
+            is_active = False
+
+        return {
+            "id": str(prov_num) if prov_num is not None else None,
+            "full_name": full_name,
+            "display_name": display_name,
+            "title": "Dr.",
+            "specialty": raw_provider.get("Specialty") or None,
+            "phone_number": raw_provider.get("Phone") or None,
+            "email": raw_provider.get("Email") or None,
+            "is_active": is_active,
+            "pms_updated_at": raw_provider.get("DateTStamp"),
+            "raw": raw_provider,
+        }
+    
     async def test_connection(self) -> dict[str, Any]:
         """
         Test API access using the faster patient list endpoint.
@@ -282,8 +332,16 @@ class OpenDentalClient(PmsClient):
             params=params,
         )
 
-    async def list_providers(self) -> Any:
-        return await self.request(
+    async def list_providers(self) -> list[dict[str, Any]]:
+        raw_providers = await self.request(
             method="GET",
             path="/providers",
         )
+
+        if not isinstance(raw_providers, list):
+            return []
+
+        return [
+            self.normalize_provider(provider)
+            for provider in raw_providers
+        ]
