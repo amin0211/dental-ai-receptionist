@@ -19,6 +19,7 @@ from supabase_service import (
     import_pms_services_to_db,
     replace_pms_availability_rules_for_date_range,
     replace_pms_appointments_for_date_range,
+    assign_all_services_to_all_pms_doctors,
 )
 
 
@@ -375,6 +376,10 @@ async def import_pms_doctors(clinic_id: str):
             connection=connection,
             doctors=doctors,
         )
+        doctor_service_result = assign_all_services_to_all_pms_doctors(
+            clinic_id=clinic_id,
+            pms_connection_id=connection_id,
+        )
 
         mark_pms_connection_success(connection_id)
 
@@ -388,6 +393,7 @@ async def import_pms_doctors(clinic_id: str):
             "imported_count": result["imported_count"],
             "failed_count": result["failed_count"],
             "failed": result["failed"],
+            "doctor_service_assignment": doctor_service_result,
         }
 
     except PmsApiError as e:
@@ -564,6 +570,10 @@ async def import_pms_services(clinic_id: str):
             connection=connection,
             services=services,
         )
+        doctor_service_result = assign_all_services_to_all_pms_doctors(
+            clinic_id=clinic_id,
+            pms_connection_id=connection_id,
+        )
 
         mark_pms_connection_success(connection_id)
 
@@ -576,6 +586,7 @@ async def import_pms_services(clinic_id: str):
             "pulled_count": len(services),
             "imported_count": result["imported_count"],
             "failed_count": result["failed_count"],
+            "doctor_service_assignment": doctor_service_result,
             "failed": result["failed"][:20],
         }
 

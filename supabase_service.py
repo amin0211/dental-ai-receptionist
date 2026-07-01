@@ -4634,3 +4634,113 @@ def get_service_category_id_for_pms_appointment(
             print(f"Raw service match failed for candidate={candidate}: {e}")
 
     return None
+
+def assign_all_services_to_all_pms_doctors(
+    clinic_id: str,
+    pms_connection_id: str,
+) -> dict[str, Any]:
+    """
+    MVP fallback for PMS systems like Open Dental.
+
+    Open Dental does not provide a reliable direct provider -> procedure/service
+    mapping for our booking product.
+
+    After importing providers and services, this function assigns every active
+    imported service to every active imported doctor for this PMS connection.
+
+    Result:
+    - clinic_doctors -> all service_categories
+    - rows stored in clinic_doctor_services
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    doctors_result = (
+        supabase.table("clinic_doctors")
+        .select("id, full_name")
+        .eq("clinic_id", clinic_id)
+        .eq("pms_connection_id", pms_connection_id)
+        .eq("is_active", True)
+        .execute()
+    )
+
+    doctors = doctors_result.data or []
+
+    services_result = (
+        supabase.table("service_categories")
+        .select("id, name")
+        .eq("clinic_id", clinic_id)
+        .eq("pms_connection_id", pms_connection_id)
+        .eq("is_active", True)
+        .execute()
+    )
+
+    services = services_result.data or []
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    payloads: list[dict[str, Any]] = []
+
+    for doctor in doctors:
+        doctor_id = doctor.get("id")
+
+        if not doctor_id:
+            continue
+
+        for service in services:
+            service_category_id = service.get("id")
+
+            if not service_category_id:
+                continue
+
+            payloads.append(
+                {
+                    "clinic_id": clinic_id,
+                    "doctor_id": doctor_id,
+                    "service_category_id": service_category_id,
+                    "is_active": True,
+                    "updated_at": now_iso,
+                }
+            )
+
+    if not payloads:
+        return {
+            "doctor_count": len(doctors),
+            "service_count": len(services),
+            "assigned_count": 0,
+            "failed_count": 0,
+            "failed": [],
+        }
+
+    assigned_rows: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    for payload_batch in chunk_list(payloads, 500):
+        try:
+            result = (
+                supabase.table("clinic_doctor_services")
+                .upsert(
+                    payload_batch,
+                    on_conflict="clinic_id,doctor_id,service_category_id",
+                )
+                .execute()
+            )
+
+            assigned_rows.extend(result.data or [])
+
+        except Exception as e:
+            failed.append(
+                {
+                    "batch_size": len(payload_batch),
+                    "error": str(e),
+                }
+            )
+
+    return {
+        "doctor_count": len(doctors),
+        "service_count": len(services),
+        "assigned_count": len(assigned_rows),
+        "failed_count": len(failed),
+        "failed": failed,
+    }
