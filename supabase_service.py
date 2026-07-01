@@ -3555,3 +3555,309 @@ def import_pms_doctors_to_db(
         "failed": failed,
     }
 
+def build_pms_service_group_payload(
+    clinic_id: str,
+    pms_connection_id: str,
+    pms_type: str,
+    group: dict[str, Any],
+    now_iso: str,
+) -> dict[str, Any]:
+    """
+    Converts one normalized PMS service group into service_groups table payload.
+    """
+
+    external_id = group.get("id")
+
+    if external_id is None or str(external_id).strip() == "":
+        raise ValueError("PMS service group is missing external id")
+
+    external_id = str(external_id)
+
+    name = group.get("name") or f"Group {external_id}"
+    slug = group.get("slug") or external_id
+
+    return {
+        "clinic_id": clinic_id,
+        "pms_connection_id": pms_connection_id,
+        "pms_type": pms_type,
+        "external_id": external_id,
+
+        "name": name,
+        "slug": slug,
+        "code": group.get("code") or external_id,
+        "description": group.get("description"),
+        "is_active": bool(group.get("is_active", True)),
+        "sort_order": int(group.get("sort_order") or 0),
+
+        "pms_updated_at": group.get("pms_updated_at"),
+        "sync_status": "synced",
+        "last_synced_at": now_iso,
+        "last_pulled_at": now_iso,
+        "last_sync_error": None,
+        "external_raw": group.get("raw") or group,
+
+        "updated_at": now_iso,
+    }
+
+def import_pms_service_groups_to_db(
+    clinic_id: str,
+    connection: dict[str, Any],
+    groups: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Bulk upserts normalized PMS service groups into service_groups table.
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    pms_connection_id = connection["id"]
+    pms_type = connection["pms_type"]
+
+    payloads: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    for group in groups:
+        try:
+            payload = build_pms_service_group_payload(
+                clinic_id=clinic_id,
+                pms_connection_id=pms_connection_id,
+                pms_type=pms_type,
+                group=group,
+                now_iso=now_iso,
+            )
+
+            payloads.append(payload)
+
+        except Exception as e:
+            failed.append(
+                {
+                    "group": group,
+                    "error": str(e),
+                }
+            )
+
+    if not payloads:
+        return {
+            "imported_count": 0,
+            "failed_count": len(failed),
+            "total_payloads": 0,
+            "imported": [],
+            "failed": failed,
+        }
+
+    imported_rows: list[dict[str, Any]] = []
+
+    for payload_batch in chunk_list(payloads, 500):
+        try:
+            result = (
+                supabase.table("service_groups")
+                .upsert(
+                    payload_batch,
+                    on_conflict="clinic_id,pms_connection_id,external_id",
+                )
+                .execute()
+            )
+
+            imported_rows.extend(result.data or [])
+
+        except Exception as e:
+            failed.append(
+                {
+                    "batch_size": len(payload_batch),
+                    "error": str(e),
+                }
+            )
+
+    return {
+        "imported_count": len(imported_rows),
+        "failed_count": len(failed),
+        "total_payloads": len(payloads),
+        "imported": imported_rows,
+        "failed": failed,
+    }
+
+def get_service_group_id_by_external_id(
+    clinic_id: str,
+    pms_connection_id: str,
+    external_id: str | None,
+) -> str | None:
+    """
+    Finds internal service_groups.id by PMS external_id.
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    if not external_id:
+        return None
+
+    result = (
+        supabase.table("service_groups")
+        .select("id")
+        .eq("clinic_id", clinic_id)
+        .eq("pms_connection_id", pms_connection_id)
+        .eq("external_id", str(external_id))
+        .limit(1)
+        .execute()
+    )
+
+    rows = result.data or []
+
+    if not rows:
+        return None
+
+    return rows[0]["id"]
+
+def build_pms_service_payload(
+    clinic_id: str,
+    pms_connection_id: str,
+    pms_type: str,
+    service: dict[str, Any],
+    now_iso: str,
+) -> dict[str, Any]:
+    """
+    Converts one normalized PMS service/procedure into service_categories table payload.
+    """
+
+    external_id = service.get("id")
+
+    if external_id is None or str(external_id).strip() == "":
+        raise ValueError("PMS service is missing external id")
+
+    external_id = str(external_id)
+
+    name = service.get("name") or f"Service {external_id}"
+    canonical_reason = service.get("canonical_reason") or name
+
+    duration_minutes = service.get("default_duration_minutes") or 30
+
+    try:
+        duration_minutes = int(duration_minutes)
+    except Exception:
+        duration_minutes = 30
+
+    if duration_minutes <= 0:
+        duration_minutes = 30
+
+    group_external_id = service.get("group_external_id")
+
+    service_group_id = get_service_group_id_by_external_id(
+        clinic_id=clinic_id,
+        pms_connection_id=pms_connection_id,
+        external_id=group_external_id,
+    )
+
+    return {
+        "clinic_id": clinic_id,
+        "pms_connection_id": pms_connection_id,
+        "pms_type": pms_type,
+        "external_id": external_id,
+
+        "service_group_id": service_group_id,
+        "code": service.get("code"),
+        "pms_updated_at": service.get("pms_updated_at"),
+
+        "name": name,
+        "canonical_reason": canonical_reason,
+        "description": service.get("description"),
+
+        "default_duration_minutes": duration_minutes,
+        "default_urgency": service.get("default_urgency") or "normal",
+
+        # Keep imported PMS services inactive by default.
+        "is_active": bool(service.get("is_active", False)),
+        "creates_appointment_request": bool(
+            service.get("creates_appointment_request", False)
+        ),
+
+        "sync_status": "synced",
+        "last_synced_at": now_iso,
+        "last_pulled_at": now_iso,
+        "last_sync_error": None,
+        "external_raw": service.get("raw") or service,
+
+        "updated_at": now_iso,
+    }
+
+def import_pms_services_to_db(
+    clinic_id: str,
+    connection: dict[str, Any],
+    services: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Bulk upserts normalized PMS services/procedure codes into service_categories table.
+    """
+
+    if supabase is None:
+        raise RuntimeError("Supabase client is not initialized")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    pms_connection_id = connection["id"]
+    pms_type = connection["pms_type"]
+
+    payloads: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    for service in services:
+        try:
+            payload = build_pms_service_payload(
+                clinic_id=clinic_id,
+                pms_connection_id=pms_connection_id,
+                pms_type=pms_type,
+                service=service,
+                now_iso=now_iso,
+            )
+
+            payloads.append(payload)
+
+        except Exception as e:
+            failed.append(
+                {
+                    "service": service,
+                    "error": str(e),
+                }
+            )
+
+    if not payloads:
+        return {
+            "imported_count": 0,
+            "failed_count": len(failed),
+            "total_payloads": 0,
+            "imported": [],
+            "failed": failed,
+        }
+
+    imported_rows: list[dict[str, Any]] = []
+
+    for payload_batch in chunk_list(payloads, 500):
+        try:
+            result = (
+                supabase.table("service_categories")
+                .upsert(
+                    payload_batch,
+                    on_conflict="clinic_id,pms_connection_id,external_id",
+                )
+                .execute()
+            )
+
+            imported_rows.extend(result.data or [])
+
+        except Exception as e:
+            failed.append(
+                {
+                    "batch_size": len(payload_batch),
+                    "error": str(e),
+                }
+            )
+
+    return {
+        "imported_count": len(imported_rows),
+        "failed_count": len(failed),
+        "total_payloads": len(payloads),
+        "imported": imported_rows,
+        "failed": failed,
+    }

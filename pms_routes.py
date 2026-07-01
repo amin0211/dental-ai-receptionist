@@ -12,6 +12,8 @@ from supabase_service import (
     mark_pms_sync_started,
     mark_pms_sync_success,
     import_pms_doctors_to_db,
+    import_pms_service_groups_to_db,
+    import_pms_services_to_db,
 )
 
 
@@ -419,3 +421,192 @@ async def import_pms_doctors(clinic_id: str):
             "clinic_id": clinic_id,
             "message": str(e),
         }
+    
+@router.post("/import-service-groups/{clinic_id}")
+async def import_pms_service_groups(clinic_id: str):
+    """
+    Imports service groups/categories from the active PMS connection into service_groups.
+    """
+
+    connection = get_active_pms_connection_for_clinic(clinic_id)
+
+    if not connection:
+        return {
+            "ok": False,
+            "type": "missing_connection",
+            "message": "No active PMS connection found for this clinic.",
+        }
+
+    connection_id = connection["id"]
+
+    try:
+        client = get_pms_client_from_connection(connection)
+
+        if not hasattr(client, "list_service_groups"):
+            return {
+                "ok": False,
+                "type": "unsupported_service_groups_import",
+                "message": "This PMS client does not support service group import yet.",
+                "clinic_id": clinic_id,
+                "connection_id": connection_id,
+                "pms_type": connection.get("pms_type"),
+            }
+
+        groups = await client.list_service_groups()
+
+        result = import_pms_service_groups_to_db(
+            clinic_id=clinic_id,
+            connection=connection,
+            groups=groups,
+        )
+
+        mark_pms_connection_success(connection_id)
+
+        return {
+            "ok": True,
+            "mode": "manual_service_group_import",
+            "clinic_id": clinic_id,
+            "connection_id": connection_id,
+            "pms_type": connection.get("pms_type"),
+            "pulled_count": len(groups),
+            "imported_count": result["imported_count"],
+            "failed_count": result["failed_count"],
+            "failed": result["failed"][:20],
+        }
+
+    except PmsApiError as e:
+        error_message = f"{e.message}: {e.response_body}"
+        mark_pms_connection_error(connection_id, error_message)
+
+        return {
+            "ok": False,
+            "type": "pms_api_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "pms_type": connection.get("pms_type"),
+            "status_code": e.status_code,
+            "message": e.message,
+            "response_body": e.response_body,
+        }
+
+    except UnsupportedPmsError as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "unsupported_pms",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
+        }
+
+    except Exception as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "server_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
+        }
+
+@router.post("/import-services/{clinic_id}")
+async def import_pms_services(clinic_id: str):
+    """
+    Imports services/procedure codes from the active PMS connection into service_categories.
+    """
+
+    connection = get_active_pms_connection_for_clinic(clinic_id)
+
+    if not connection:
+        return {
+            "ok": False,
+            "type": "missing_connection",
+            "message": "No active PMS connection found for this clinic.",
+        }
+
+    connection_id = connection["id"]
+
+    try:
+        client = get_pms_client_from_connection(connection)
+
+        if not hasattr(client, "list_services"):
+            return {
+                "ok": False,
+                "type": "unsupported_services_import",
+                "message": "This PMS client does not support services/procedure import yet.",
+                "clinic_id": clinic_id,
+                "connection_id": connection_id,
+                "pms_type": connection.get("pms_type"),
+            }
+
+        # Important:
+        # Import groups first so procedure codes can link to service_group_id.
+        if hasattr(client, "list_service_groups"):
+            groups = await client.list_service_groups()
+
+            import_pms_service_groups_to_db(
+                clinic_id=clinic_id,
+                connection=connection,
+                groups=groups,
+            )
+
+        services = await client.list_services()
+
+        result = import_pms_services_to_db(
+            clinic_id=clinic_id,
+            connection=connection,
+            services=services,
+        )
+
+        mark_pms_connection_success(connection_id)
+
+        return {
+            "ok": True,
+            "mode": "manual_service_import",
+            "clinic_id": clinic_id,
+            "connection_id": connection_id,
+            "pms_type": connection.get("pms_type"),
+            "pulled_count": len(services),
+            "imported_count": result["imported_count"],
+            "failed_count": result["failed_count"],
+            "failed": result["failed"][:20],
+        }
+
+    except PmsApiError as e:
+        error_message = f"{e.message}: {e.response_body}"
+        mark_pms_connection_error(connection_id, error_message)
+
+        return {
+            "ok": False,
+            "type": "pms_api_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "pms_type": connection.get("pms_type"),
+            "status_code": e.status_code,
+            "message": e.message,
+            "response_body": e.response_body,
+        }
+
+    except UnsupportedPmsError as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "unsupported_pms",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
+        }
+
+    except Exception as e:
+        mark_pms_connection_error(connection_id, str(e))
+
+        return {
+            "ok": False,
+            "type": "server_error",
+            "connection_id": connection_id,
+            "clinic_id": clinic_id,
+            "message": str(e),
+        }        

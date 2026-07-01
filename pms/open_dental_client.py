@@ -345,3 +345,177 @@ class OpenDentalClient(PmsClient):
             self.normalize_provider(provider)
             for provider in raw_providers
         ]
+    
+    def make_slug(self, value: str | None) -> str:
+        if not value:
+            return "unknown"
+
+        slug = str(value).strip().lower()
+
+        cleaned = []
+
+        previous_dash = False
+
+        for ch in slug:
+            if ch.isalnum():
+                cleaned.append(ch)
+                previous_dash = False
+            else:
+                if not previous_dash:
+                    cleaned.append("-")
+                    previous_dash = True
+
+        slug = "".join(cleaned).strip("-")
+
+        return slug or "unknown"
+    
+    def parse_open_dental_proc_time_minutes(
+        self,
+        proc_time: str | None,
+    ) -> int:
+        """
+        Converts Open Dental ProcTime pattern into approximate minutes.
+
+        MVP rule:
+        - Count X characters as time units.
+        - Each X = 10 minutes.
+        - Fallback = 30 minutes.
+        """
+
+        if not proc_time:
+            return 30
+
+        x_count = str(proc_time).upper().count("X")
+
+        if x_count <= 0:
+            return 30
+
+        minutes = x_count * 10
+
+        if minutes < 10:
+            return 10
+
+        if minutes > 240:
+            return 240
+
+        return minutes
+    
+    def normalize_service_group(self, raw_group: dict[str, Any]) -> dict[str, Any]:
+        """
+        Converts Open Dental definition row into our normalized service group format.
+
+        Open Dental:
+        - DefNum -> id/code
+        - ItemName -> name
+        - Category = 11 means procedure code category
+        """
+
+        def_num = raw_group.get("DefNum")
+
+        name = (
+            raw_group.get("ItemName")
+            or raw_group.get("Name")
+            or raw_group.get("Description")
+            or f"Group {def_num}"
+        )
+
+        code = str(def_num) if def_num is not None else None
+
+        return {
+            "id": str(def_num) if def_num is not None else None,
+            "code": code,
+            "name": name,
+            "slug": self.make_slug(name),
+            "description": raw_group.get("ItemValue") or None,
+            "is_active": True,
+            "sort_order": raw_group.get("ItemOrder") or 0,
+            "pms_updated_at": raw_group.get("DateTStamp"),
+            "raw": raw_group,
+        }    
+
+    async def list_service_groups(self) -> list[dict[str, Any]]:
+        """
+        Reads Open Dental procedure code categories from definitions.
+
+        Open Dental procedure code categories are definitions where Category = 11.
+        """
+
+        raw_groups = await self.request(
+            method="GET",
+            path="/definitions",
+            params={
+                "Category": 11,
+            },
+        )
+
+        if not isinstance(raw_groups, list):
+            return []
+
+        return [
+            self.normalize_service_group(group)
+            for group in raw_groups
+        ]
+    
+    def normalize_service(self, raw_service: dict[str, Any]) -> dict[str, Any]:
+        """
+        Converts Open Dental procedure code into our normalized service format.
+
+        Open Dental:
+        - CodeNum -> external_id
+        - ProcCode -> code shown to user, e.g. D1110
+        - Descript -> name
+        - ProcCat -> Open Dental definition.DefNum, used only to link service_group_id
+        - ProcTime -> default_duration_minutes
+        """
+
+        code_num = raw_service.get("CodeNum")
+        proc_code = raw_service.get("ProcCode")
+
+        description = (
+            raw_service.get("Descript")
+            or raw_service.get("AbbrDesc")
+            or proc_code
+            or f"Procedure {code_num}"
+        )
+
+        duration_minutes = self.parse_open_dental_proc_time_minutes(
+            raw_service.get("ProcTime")
+        )
+
+        proc_cat = raw_service.get("ProcCat")
+
+        return {
+            "id": str(code_num) if code_num is not None else None,
+            "code": proc_code,
+            "name": description,
+            "canonical_reason": description,
+            "description": raw_service.get("AbbrDesc") or description,
+
+            # This is not saved directly into service_categories.
+            # It is only used by backend to find service_groups.id.
+            "group_external_id": str(proc_cat) if proc_cat is not None else None,
+
+            "default_duration_minutes": duration_minutes,
+            "default_urgency": "normal",
+
+            # Imported PMS services should not automatically become AI-bookable.
+            "is_active": False,
+            "creates_appointment_request": False,
+
+            "pms_updated_at": raw_service.get("DateTStamp"),
+            "raw": raw_service,
+        }
+    
+    async def list_services(self) -> list[dict[str, Any]]:
+        raw_services = await self.request(
+            method="GET",
+            path="/procedurecodes",
+        )
+
+        if not isinstance(raw_services, list):
+            return []
+
+        return [
+            self.normalize_service(service)
+            for service in raw_services
+        ]
