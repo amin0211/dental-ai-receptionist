@@ -3820,11 +3820,9 @@ def build_pms_service_payload(
         "default_duration_minutes": duration_minutes,
         "default_urgency": service.get("default_urgency") or "normal",
 
-        # Keep imported PMS services inactive by default.
-        "is_active": bool(service.get("is_active", False)),
-        "creates_appointment_request": bool(
-            service.get("creates_appointment_request", False)
-        ),
+        # Imported PMS services should be active by default for MVP booking.
+        "is_active": True,
+        "creates_appointment_request": True,
 
         "sync_status": "synced",
         "last_synced_at": now_iso,
